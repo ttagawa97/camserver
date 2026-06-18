@@ -1,0 +1,1632 @@
+# ==============================================================================
+# 02_data_spec.yaml
+# ==============================================================================
+# システム名:
+#   インターネットカメラ静止画管理システム
+#
+# 目的:
+#   本ファイルでは、システムで扱うデータ構造、画像保存フォルダ構成、
+#   ファイル命名規則、画像メタデータ、カメラ認証情報、保存期間管理を定義する。
+#
+# 本ファイルの位置づけ:
+#   - 01_overall_spec.yaml で定義した全体仕様をもとに、データ面の仕様を定義する。
+#   - DBテーブル設計、ファイル保存設計、API設計の前提となる論理データ仕様を記載する。
+#   - 物理DB定義そのものではなく、Ver0.8時点の論理データ仕様として整理する。
+#
+# 分割ファイル構成:
+#   - 01_overall_spec.yaml : 全体仕様
+#   - 02_data_spec.yaml    : データ仕様・フォルダ構成・画像保存仕様
+#   - 03_ui_spec.yaml      : UI仕様・画面遷移・画面項目
+#   - 04_api_spec.yaml     : API仕様
+#   - 05_infra_spec.yaml   : インフラ仕様・バッチ・運用構成
+#
+# バージョン:
+#   Ver0.8
+#
+# 注意:
+#   本仕様は現時点の会話内容をもとにした初期整理版であり、
+#   未決事項は pending_items に明示する。
+# ==============================================================================
+
+
+# ==============================================================================
+# 修正履歴
+# ==============================================================================
+revision_history:
+  - version: "0.8"
+    date: "2026-06-18"
+    author: "ChatGPT"
+    changes:
+      - "初版作成"
+      - "企業、現場、ユーザー、カメラ、画像メタデータの論理データ仕様を定義"
+      - "画像保存フォルダ構成を企業・現場・カメラ・日付階層として定義"
+      - "サーバー側画像変換による保存画質仕様を定義"
+      - "カメラごとの保存期間管理仕様を定義"
+      - "カメラ認証情報としてBASIC認証用ID、パスワードを定義"
+      - "サムネイル、原寸画像、最新画像のデータ上の扱いを整理"
+      - "未決事項として、暗号化方式、削除方式、サムネイル生成方式などを整理"
+
+
+# ==============================================================================
+# データ仕様基本方針
+# ==============================================================================
+data_policy:
+  description: >
+    本システムでは、管理情報はDBに保存し、取得した画像ファイルは
+    サーバー上のファイルシステムに保存する。
+    DBには画像ファイル本体ではなく、画像ファイルの保存パス、取得日時、
+    カメラIDなどのメタデータを保持する。
+
+  storage_strategy:
+    master_data_storage: "DB"
+    camera_setting_storage: "DB"
+    image_file_storage: "FileSystem"
+    image_binary_storage_in_db: false
+    image_metadata_storage: "DB"
+
+  key_principles:
+    - "画像ファイル本体はDBに保存しない"
+    - "画像ファイルは企業・現場・カメラ・日付単位のフォルダに保存する"
+    - "画像の検索、日付選択、最新画像判定に必要な情報はDBにメタデータとして保持する"
+    - "カメラ接続情報はDBに保存する"
+    - "カメラパスワードは平文保存しない方針とする"
+    - "カメラごとに取得間隔、保存画質、保存期間を設定可能とする"
+
+
+# ==============================================================================
+# ID・コード設計方針
+# ==============================================================================
+id_policy:
+  description: "各データは内部IDを持ち、画面表示名とは分離して管理する"
+
+  internal_id:
+    type: "UUIDまたはDB採番ID"
+    recommendation: "UUID"
+    reason:
+      - "フォルダ名や外部参照名と内部識別子を分離できる"
+      - "企業名、現場名、カメラ名の変更に強い"
+      - "将来的な分散構成や外部連携に対応しやすい"
+
+  display_name:
+    description: "ユーザーが画面上で確認する名称"
+    mutable: true
+
+  storage_code:
+    description: "フォルダパスに使用する安全なコード"
+    mutable: false
+    note: "企業名、現場名、カメラ名をそのままフォルダ名に使うと名称変更や禁止文字の問題があるため、保存用コードを別管理する"
+
+  recommended_code_format:
+    company_code: "company_000001"
+    site_code: "site_000001"
+    camera_code: "camera_000001"
+
+
+# ==============================================================================
+# データエンティティ一覧
+# ==============================================================================
+entities:
+  - name: "company"
+    description: "企業情報"
+  - name: "site"
+    description: "現場情報"
+  - name: "user"
+    description: "ユーザー情報"
+  - name: "camera"
+    description: "カメラ設定情報"
+  - name: "camera_auth"
+    description: "カメラ認証情報"
+  - name: "captured_image"
+    description: "取得画像メタデータ"
+  - name: "camera_latest_image"
+    description: "カメラ別最新画像参照情報"
+  - name: "image_available_date"
+    description: "画像が存在する日付情報"
+  - name: "camera_connection_test_log"
+    description: "カメラ接続テスト結果ログ"
+  - name: "camera_capture_log"
+    description: "カメラ定期取得処理ログ"
+  - name: "audit_log"
+    description: "操作監査ログ。Ver0.8では要否未決"
+
+
+# ==============================================================================
+# 企業データ
+# ==============================================================================
+company:
+  description: "システム上の最上位管理単位"
+
+  fields:
+    company_id:
+      type: "string"
+      required: true
+      primary_key: true
+      description: "企業内部ID"
+
+    company_code:
+      type: "string"
+      required: true
+      unique: true
+      description: "フォルダパスや外部参照に使用する企業コード"
+      example: "company_000001"
+
+    company_name:
+      type: "string"
+      required: true
+      description: "画面表示用の企業名"
+      example: "A社"
+
+    status:
+      type: "string"
+      required: true
+      allowed_values:
+        - "active"
+        - "inactive"
+        - "deleted"
+      default: "active"
+      description: "企業の状態"
+
+    created_at:
+      type: "datetime"
+      required: true
+      description: "作成日時"
+
+    updated_at:
+      type: "datetime"
+      required: true
+      description: "更新日時"
+
+  relations:
+    has_many:
+      - "site"
+      - "user"
+      - "camera"
+
+
+# ==============================================================================
+# 現場データ
+# ==============================================================================
+site:
+  description: "企業配下のカメラ設置現場、拠点、施設"
+
+  fields:
+    site_id:
+      type: "string"
+      required: true
+      primary_key: true
+      description: "現場内部ID"
+
+    company_id:
+      type: "string"
+      required: true
+      foreign_key: "company.company_id"
+      description: "所属企業ID"
+
+    site_code:
+      type: "string"
+      required: true
+      unique_in_company: true
+      description: "フォルダパスや外部参照に使用する現場コード"
+      example: "site_000001"
+
+    site_name:
+      type: "string"
+      required: true
+      description: "画面表示用の現場名"
+      example: "札幌第1現場"
+
+    status:
+      type: "string"
+      required: true
+      allowed_values:
+        - "active"
+        - "inactive"
+        - "deleted"
+      default: "active"
+      description: "現場の状態"
+
+    created_at:
+      type: "datetime"
+      required: true
+      description: "作成日時"
+
+    updated_at:
+      type: "datetime"
+      required: true
+      description: "更新日時"
+
+  relations:
+    belongs_to:
+      - "company"
+    has_many:
+      - "camera"
+      - "user"
+
+
+# ==============================================================================
+# ユーザーデータ
+# ==============================================================================
+user:
+  description: "システムにログインする利用者"
+
+  fields:
+    user_id:
+      type: "string"
+      required: true
+      primary_key: true
+      description: "ユーザー内部ID"
+
+    login_id:
+      type: "string"
+      required: true
+      unique: true
+      description: "ログインID"
+
+    user_name:
+      type: "string"
+      required: true
+      description: "画面表示用ユーザー名"
+
+    password_hash:
+      type: "string"
+      required: true
+      description: "ログイン用パスワードのハッシュ値"
+
+    role:
+      type: "string"
+      required: true
+      allowed_values:
+        - "system_admin"
+        - "company_admin"
+        - "site_admin"
+        - "general_user"
+      description: "ユーザー権限"
+
+    company_id:
+      type: "string"
+      required_condition: "roleがcompany_admin、site_admin、general_userの場合は必須"
+      nullable_condition: "roleがsystem_adminの場合はnullable"
+      foreign_key: "company.company_id"
+      description: "所属企業ID"
+
+    site_id:
+      type: "string"
+      required_condition: "roleがsite_admin、general_userの場合は必須"
+      nullable_condition: "roleがsystem_admin、company_adminの場合はnullable"
+      foreign_key: "site.site_id"
+      description: "所属現場ID"
+
+    status:
+      type: "string"
+      required: true
+      allowed_values:
+        - "active"
+        - "inactive"
+        - "deleted"
+      default: "active"
+      description: "ユーザー状態"
+
+    last_login_at:
+      type: "datetime"
+      required: false
+      description: "最終ログイン日時"
+
+    created_at:
+      type: "datetime"
+      required: true
+      description: "作成日時"
+
+    updated_at:
+      type: "datetime"
+      required: true
+      description: "更新日時"
+
+  role_scope_rules:
+    system_admin:
+      company_id: "nullable"
+      site_id: "nullable"
+      access_scope: "all_companies_all_sites"
+
+    company_admin:
+      company_id: "required"
+      site_id: "nullable"
+      access_scope: "own_company_all_sites"
+
+    site_admin:
+      company_id: "required"
+      site_id: "required"
+      access_scope: "own_site"
+
+    general_user:
+      company_id: "required"
+      site_id: "required"
+      access_scope: "own_site"
+
+
+# ==============================================================================
+# カメラデータ
+# ==============================================================================
+camera:
+  description: "静止画取得対象のインターネットカメラ設定"
+
+  fields:
+    camera_id:
+      type: "string"
+      required: true
+      primary_key: true
+      description: "カメラ内部ID"
+
+    company_id:
+      type: "string"
+      required: true
+      foreign_key: "company.company_id"
+      description: "所属企業ID"
+
+    site_id:
+      type: "string"
+      required: true
+      foreign_key: "site.site_id"
+      description: "所属現場ID"
+
+    camera_code:
+      type: "string"
+      required: true
+      unique_in_site: true
+      description: "フォルダパスや外部参照に使用するカメラコード"
+      example: "camera_000001"
+
+    camera_name:
+      type: "string"
+      required: true
+      description: "画面表示用のカメラ名"
+      example: "正面入口カメラ"
+
+    address:
+      type: "string"
+      required: true
+      description: "静止画取得先となるURLまたは接続アドレス"
+      example: "http://192.168.1.10/snapshot.jpg"
+
+    auth_method:
+      type: "string"
+      required: true
+      allowed_values:
+        - "basic"
+      default: "basic"
+      description: "カメラ接続時の認証方式。Ver0.8ではBASIC認証のみ"
+
+    capture_interval_minutes:
+      type: "integer"
+      required: true
+      minimum: 1
+      description: "静止画取得間隔。単位は分。最短1分"
+
+    image_quality:
+      type: "string"
+      required: true
+      allowed_values:
+        - "VGA"
+        - "SVGA"
+        - "WXGA"
+        - "HD"
+        - "FullHD"
+        - "4K"
+      description: "保存画質。画像取得後、サーバー側でこの画質へ変換して保存する"
+
+    retention_days:
+      type: "integer"
+      required: true
+      minimum: 1
+      description: "画像保存期間。単位は日"
+
+    status:
+      type: "string"
+      required: true
+      allowed_values:
+        - "active"
+        - "inactive"
+        - "deleted"
+      default: "active"
+      description: "カメラ状態。削除方式が論理削除の場合はdeletedを使用する"
+
+    last_capture_at:
+      type: "datetime"
+      required: false
+      description: "最後に画像取得に成功した日時"
+
+    last_capture_status:
+      type: "string"
+      required: false
+      allowed_values:
+        - "success"
+        - "failed"
+        - "not_yet"
+      description: "直近の画像取得状態"
+
+    last_capture_error:
+      type: "string"
+      required: false
+      description: "直近の画像取得失敗理由"
+
+    created_by:
+      type: "string"
+      required: false
+      foreign_key: "user.user_id"
+      description: "作成ユーザーID"
+
+    updated_by:
+      type: "string"
+      required: false
+      foreign_key: "user.user_id"
+      description: "更新ユーザーID"
+
+    created_at:
+      type: "datetime"
+      required: true
+      description: "作成日時"
+
+    updated_at:
+      type: "datetime"
+      required: true
+      description: "更新日時"
+
+  relations:
+    belongs_to:
+      - "company"
+      - "site"
+    has_one:
+      - "camera_auth"
+      - "camera_latest_image"
+    has_many:
+      - "captured_image"
+      - "camera_capture_log"
+      - "camera_connection_test_log"
+
+  delete_rule:
+    enabled: true
+    method: "未決"
+    recommended_method: "logical_delete"
+    note: "Ver0.8ではカメラ削除可能とする。物理削除か論理削除かは未決"
+
+
+# ==============================================================================
+# カメラ認証情報データ
+# ==============================================================================
+camera_auth:
+  description: "カメラ接続に使用する認証情報"
+
+  fields:
+    camera_auth_id:
+      type: "string"
+      required: true
+      primary_key: true
+      description: "カメラ認証情報ID"
+
+    camera_id:
+      type: "string"
+      required: true
+      unique: true
+      foreign_key: "camera.camera_id"
+      description: "対象カメラID"
+
+    auth_method:
+      type: "string"
+      required: true
+      allowed_values:
+        - "basic"
+      default: "basic"
+      description: "認証方式"
+
+    login_id:
+      type: "string"
+      required: true
+      description: "カメラ接続用ID"
+
+    encrypted_password:
+      type: "string"
+      required: true
+      description: "暗号化されたカメラ接続用パスワード"
+
+    password_update_rule:
+      type: "string"
+      required: true
+      value: "overwrite"
+      description: "パスワード変更時は入力値で上書きする"
+
+    created_at:
+      type: "datetime"
+      required: true
+      description: "作成日時"
+
+    updated_at:
+      type: "datetime"
+      required: true
+      description: "更新日時"
+
+  security_policy:
+    plain_text_password_storage: false
+    encrypted_storage: true
+    encryption_method: "未決"
+    secret_key_management: "未決"
+
+  update_rule:
+    password_update: "overwrite"
+    description: "再設定時に入力されたパスワードで既存パスワードを上書きする"
+
+
+# ==============================================================================
+# 保存画質定義
+# ==============================================================================
+image_quality_definitions:
+  description: "保存画質はサーバー側で変換する。変換後の画像を保存対象とする"
+
+  conversion_policy:
+    conversion_by_server: true
+    conversion_timing: "画像取得後、ファイル保存前"
+    keep_original_before_conversion: "未決"
+    converted_image_is_original_for_viewing: true
+
+  qualities:
+    VGA:
+      label: "VGA"
+      width: 640
+      height: 480
+      aspect_ratio_note: "4:3想定"
+
+    SVGA:
+      label: "SVGA"
+      width: 800
+      height: 600
+      aspect_ratio_note: "4:3想定"
+
+    WXGA:
+      label: "WXGA"
+      width: 1280
+      height: 800
+      aspect_ratio_note: "16:10想定"
+
+    HD:
+      label: "HD"
+      width: 1280
+      height: 720
+      aspect_ratio_note: "16:9想定"
+
+    FullHD:
+      label: "FullHD"
+      width: 1920
+      height: 1080
+      aspect_ratio_note: "16:9想定"
+
+    "4K":
+      label: "4K"
+      width: 3840
+      height: 2160
+      aspect_ratio_note: "16:9想定"
+
+  resize_rule:
+    description: "元画像の縦横比を維持して、指定画質の範囲内に収まるようにリサイズする"
+    preserve_aspect_ratio: true
+    upscale_smaller_image: false
+    note: "元画像が指定画質より小さい場合に拡大するかは未決。Ver0.8では拡大しないことを推奨"
+
+
+# ==============================================================================
+# 取得画像メタデータ
+# ==============================================================================
+captured_image:
+  description: "カメラから取得し、サーバーに保存された画像のメタデータ"
+
+  fields:
+    image_id:
+      type: "string"
+      required: true
+      primary_key: true
+      description: "画像内部ID"
+
+    company_id:
+      type: "string"
+      required: true
+      foreign_key: "company.company_id"
+      description: "所属企業ID"
+
+    site_id:
+      type: "string"
+      required: true
+      foreign_key: "site.site_id"
+      description: "所属現場ID"
+
+    camera_id:
+      type: "string"
+      required: true
+      foreign_key: "camera.camera_id"
+      description: "対象カメラID"
+
+    captured_at:
+      type: "datetime"
+      required: true
+      description: "カメラから画像を取得した日時"
+
+    captured_date:
+      type: "date"
+      required: true
+      description: "日付選択、フォルダ分類に使用する取得日"
+
+    file_name:
+      type: "string"
+      required: true
+      description: "保存された画像ファイル名"
+      example: "20260618_143000.jpg"
+
+    file_path:
+      type: "string"
+      required: true
+      description: "画像ファイルの保存パス"
+      example: "/image_storage/company_000001/site_000001/camera_000001/2026-06-18/20260618_143000.jpg"
+
+    thumbnail_file_name:
+      type: "string"
+      required: false
+      description: "サムネイルファイル名。サムネイルをファイル保存する場合に使用"
+      example: "20260618_143000_thumb.jpg"
+
+    thumbnail_file_path:
+      type: "string"
+      required: false
+      description: "サムネイル画像の保存パス。サムネイルをファイル保存する場合に使用"
+
+    image_quality:
+      type: "string"
+      required: true
+      description: "保存時に適用された保存画質"
+
+    width:
+      type: "integer"
+      required: false
+      description: "保存画像の横幅"
+
+    height:
+      type: "integer"
+      required: false
+      description: "保存画像の高さ"
+
+    file_size_bytes:
+      type: "integer"
+      required: false
+      description: "画像ファイルサイズ"
+
+    mime_type:
+      type: "string"
+      required: false
+      default: "image/jpeg"
+      description: "画像MIMEタイプ"
+
+    capture_status:
+      type: "string"
+      required: true
+      allowed_values:
+        - "success"
+        - "failed"
+      default: "success"
+      description: "画像取得結果。通常、成功した画像のみ captured_image に登録する想定"
+
+    created_at:
+      type: "datetime"
+      required: true
+      description: "メタデータ作成日時"
+
+  indexes:
+    - name: "idx_captured_image_camera_date"
+      fields:
+        - "camera_id"
+        - "captured_date"
+      purpose: "カメラ別・日付別のサムネイル一覧取得を高速化"
+
+    - name: "idx_captured_image_camera_captured_at"
+      fields:
+        - "camera_id"
+        - "captured_at"
+      purpose: "カメラ別の最新画像取得を高速化"
+
+    - name: "idx_captured_image_site_date"
+      fields:
+        - "site_id"
+        - "captured_date"
+      purpose: "現場内の画像存在日付取得を高速化"
+
+
+# ==============================================================================
+# カメラ別最新画像参照データ
+# ==============================================================================
+camera_latest_image:
+  description: "複数カメラ最新画像まとめ表示を高速化するための最新画像参照情報"
+
+  fields:
+    camera_id:
+      type: "string"
+      required: true
+      primary_key: true
+      foreign_key: "camera.camera_id"
+      description: "対象カメラID"
+
+    latest_image_id:
+      type: "string"
+      required: false
+      foreign_key: "captured_image.image_id"
+      description: "最新画像ID"
+
+    latest_captured_at:
+      type: "datetime"
+      required: false
+      description: "最新画像の取得日時"
+
+    latest_file_path:
+      type: "string"
+      required: false
+      description: "最新画像ファイルパス"
+
+    latest_thumbnail_file_path:
+      type: "string"
+      required: false
+      description: "最新サムネイルファイルパス"
+
+    latest_status:
+      type: "string"
+      required: true
+      allowed_values:
+        - "success"
+        - "failed"
+        - "not_yet"
+      default: "not_yet"
+      description: "最新取得状態"
+
+    latest_error:
+      type: "string"
+      required: false
+      description: "最新取得失敗理由"
+
+    updated_at:
+      type: "datetime"
+      required: true
+      description: "更新日時"
+
+  update_timing:
+    - "画像取得成功時"
+    - "画像取得失敗時"
+    - "カメラ設定変更時"
+    - "保存期間超過による画像削除時"
+
+  usage:
+    - "複数カメラ最新画像まとめ表示"
+    - "カメラリスト上の最新状態表示"
+    - "最新画像が存在する日付の判定補助"
+
+
+# ==============================================================================
+# 画像存在日付データ
+# ==============================================================================
+image_available_date:
+  description: "カレンダーで画像が存在する日付のみ選択可能にするためのデータ"
+
+  implementation_policy:
+    preferred_method: "DB集計または日次サマリテーブル"
+    alternatives:
+      - "captured_imageテーブルから都度DISTINCTで取得"
+      - "image_available_dateとしてサマリ保持"
+    recommendation: "画像件数が増えるため、サマリ保持を推奨"
+
+  fields:
+    company_id:
+      type: "string"
+      required: true
+      foreign_key: "company.company_id"
+      description: "企業ID"
+
+    site_id:
+      type: "string"
+      required: true
+      foreign_key: "site.site_id"
+      description: "現場ID"
+
+    camera_id:
+      type: "string"
+      required: false
+      foreign_key: "camera.camera_id"
+      description: "カメラID。カメラ単位で日付を判定する場合に使用"
+
+    image_date:
+      type: "date"
+      required: true
+      description: "画像が存在する日付"
+
+    image_count:
+      type: "integer"
+      required: true
+      description: "対象日付に存在する画像数"
+
+    latest_captured_at:
+      type: "datetime"
+      required: false
+      description: "対象日付内の最新画像取得日時"
+
+    updated_at:
+      type: "datetime"
+      required: true
+      description: "更新日時"
+
+  unique_key_options:
+    site_level:
+      fields:
+        - "site_id"
+        - "image_date"
+      description: "現場単位で画像存在日を管理する場合"
+
+    camera_level:
+      fields:
+        - "camera_id"
+        - "image_date"
+      description: "カメラ単位で画像存在日を管理する場合"
+
+  note: "Ver0.8では、画面仕様に応じて現場単位・カメラ単位のどちらで日付判定するか未決"
+
+
+# ==============================================================================
+# カメラ接続テストログ
+# ==============================================================================
+camera_connection_test_log:
+  description: "カメラ登録・再設定時に実行する接続テストの結果ログ"
+
+  fields:
+    test_log_id:
+      type: "string"
+      required: true
+      primary_key: true
+      description: "接続テストログID"
+
+    camera_id:
+      type: "string"
+      required: false
+      foreign_key: "camera.camera_id"
+      description: "既存カメラの場合の対象カメラID。新規登録前のテストではnullable"
+
+    company_id:
+      type: "string"
+      required: true
+      foreign_key: "company.company_id"
+      description: "対象企業ID"
+
+    site_id:
+      type: "string"
+      required: true
+      foreign_key: "site.site_id"
+      description: "対象現場ID"
+
+    tested_address:
+      type: "string"
+      required: true
+      description: "接続テストに使用したアドレス"
+
+    auth_method:
+      type: "string"
+      required: true
+      allowed_values:
+        - "basic"
+      description: "接続テストに使用した認証方式"
+
+    tested_by:
+      type: "string"
+      required: true
+      foreign_key: "user.user_id"
+      description: "接続テストを実行したユーザーID"
+
+    tested_at:
+      type: "datetime"
+      required: true
+      description: "接続テスト実行日時"
+
+    result:
+      type: "string"
+      required: true
+      allowed_values:
+        - "success"
+        - "failed"
+      description: "接続テスト結果"
+
+    http_status_code:
+      type: "integer"
+      required: false
+      description: "HTTP接続時のステータスコード"
+
+    response_time_ms:
+      type: "integer"
+      required: false
+      description: "応答時間。単位はミリ秒"
+
+    error_message:
+      type: "string"
+      required: false
+      description: "失敗時のエラーメッセージ"
+
+    preview_image_path:
+      type: "string"
+      required: false
+      description: "接続テスト成功時にプレビュー画像を保存する場合のパス。保存するかは未決"
+
+  retention_policy:
+    description: "接続テストログの保存期間"
+    retention_days: "未決"
+
+
+# ==============================================================================
+# カメラ定期取得ログ
+# ==============================================================================
+camera_capture_log:
+  description: "定期取得処理の実行結果ログ"
+
+  fields:
+    capture_log_id:
+      type: "string"
+      required: true
+      primary_key: true
+      description: "取得ログID"
+
+    camera_id:
+      type: "string"
+      required: true
+      foreign_key: "camera.camera_id"
+      description: "対象カメラID"
+
+    scheduled_at:
+      type: "datetime"
+      required: true
+      description: "取得予定日時"
+
+    started_at:
+      type: "datetime"
+      required: true
+      description: "取得開始日時"
+
+    finished_at:
+      type: "datetime"
+      required: false
+      description: "取得終了日時"
+
+    result:
+      type: "string"
+      required: true
+      allowed_values:
+        - "success"
+        - "failed"
+        - "skipped"
+      description: "取得処理結果"
+
+    image_id:
+      type: "string"
+      required: false
+      foreign_key: "captured_image.image_id"
+      description: "取得成功時に作成された画像ID"
+
+    http_status_code:
+      type: "integer"
+      required: false
+      description: "HTTP接続時のステータスコード"
+
+    response_time_ms:
+      type: "integer"
+      required: false
+      description: "カメラ応答時間。単位はミリ秒"
+
+    error_message:
+      type: "string"
+      required: false
+      description: "失敗時のエラー内容"
+
+    retry_count:
+      type: "integer"
+      required: true
+      default: 0
+      description: "リトライ回数"
+
+  retention_policy:
+    description: "取得ログの保存期間"
+    retention_days: "未決"
+
+
+# ==============================================================================
+# 操作監査ログ
+# ==============================================================================
+audit_log:
+  description: "ユーザー操作の監査ログ。Ver0.8では要否未決だが、データ構造候補として定義する"
+
+  enabled: "未決"
+
+  candidate_target_operations:
+    - "ログイン"
+    - "カメラ追加"
+    - "カメラ再設定"
+    - "カメラ削除"
+    - "カメラ接続テスト"
+    - "企業選択"
+    - "現場選択"
+    - "画像原寸表示"
+    - "複数カメラ最新画像まとめ表示"
+
+  fields:
+    audit_log_id:
+      type: "string"
+      required: true
+      primary_key: true
+      description: "監査ログID"
+
+    user_id:
+      type: "string"
+      required: true
+      foreign_key: "user.user_id"
+      description: "操作ユーザーID"
+
+    role:
+      type: "string"
+      required: true
+      description: "操作時のユーザー権限"
+
+    operation:
+      type: "string"
+      required: true
+      description: "操作種別"
+
+    target_type:
+      type: "string"
+      required: false
+      description: "操作対象種別"
+
+    target_id:
+      type: "string"
+      required: false
+      description: "操作対象ID"
+
+    result:
+      type: "string"
+      required: true
+      allowed_values:
+        - "success"
+        - "failed"
+      description: "操作結果"
+
+    detail:
+      type: "string"
+      required: false
+      description: "操作詳細"
+
+    operated_at:
+      type: "datetime"
+      required: true
+      description: "操作日時"
+
+
+# ==============================================================================
+# 画像フォルダ構成
+# ==============================================================================
+image_storage:
+  description: "画像ファイルはサーバー上の特定フォルダに保存する"
+
+  root_directory:
+    path: "/image_storage"
+    description: "画像保存ルートディレクトリ"
+    note: "実際のパスは環境ごとに設定可能とする"
+
+  hierarchy:
+    pattern: "/image_storage/{company_code}/{site_code}/{camera_code}/{date}/"
+    levels:
+      - level: 1
+        name: "company_code"
+        description: "企業コード"
+        example: "company_000001"
+
+      - level: 2
+        name: "site_code"
+        description: "現場コード"
+        example: "site_000001"
+
+      - level: 3
+        name: "camera_code"
+        description: "カメラコード"
+        example: "camera_000001"
+
+      - level: 4
+        name: "date"
+        description: "取得日。YYYY-MM-DD形式"
+        example: "2026-06-18"
+
+  example:
+    original_image_path: "/image_storage/company_000001/site_000001/camera_000001/2026-06-18/20260618_143000.jpg"
+    thumbnail_image_path: "/image_storage/company_000001/site_000001/camera_000001/2026-06-18/thumb/20260618_143000_thumb.jpg"
+
+  directory_creation_rule:
+    description: "画像保存時に対象フォルダが存在しない場合は自動作成する"
+    create_if_not_exists: true
+
+  forbidden_path_rule:
+    description: "企業名、現場名、カメラ名を直接パスに使用しない"
+    use_display_name_as_path: false
+    use_code_as_path: true
+
+
+# ==============================================================================
+# ファイル命名規則
+# ==============================================================================
+file_naming:
+  description: "画像ファイル名は取得日時をもとに一意になる形式とする"
+
+  original_image:
+    pattern: "{yyyyMMdd}_{HHmmss}.jpg"
+    example: "20260618_143000.jpg"
+    timezone: "Asia/Tokyo"
+    note: "同一秒に複数画像が保存される可能性がある場合、ミリ秒または連番を付与する"
+
+  thumbnail_image:
+    pattern: "{yyyyMMdd}_{HHmmss}_thumb.jpg"
+    example: "20260618_143000_thumb.jpg"
+
+  duplicate_rule:
+    description: "同一ファイル名が存在する場合の扱い"
+    method: "未決"
+    candidate_options:
+      - "ミリ秒を付与する"
+      - "連番を付与する"
+      - "UUIDを付与する"
+
+  recommended_pattern_for_uniqueness:
+    original_image: "{yyyyMMdd}_{HHmmss}_{milliseconds}.jpg"
+    thumbnail_image: "{yyyyMMdd}_{HHmmss}_{milliseconds}_thumb.jpg"
+
+
+# ==============================================================================
+# サムネイル仕様
+# ==============================================================================
+thumbnail:
+  description: "サムネイル画面で使用する縮小画像"
+
+  generation_required: true
+
+  generation_timing:
+    status: "未決"
+    candidate_options:
+      - "画像取得時に生成"
+      - "初回表示時に生成"
+      - "表示時に都度生成"
+    recommendation: "画像取得時に生成"
+
+  storage:
+    status: "未決"
+    candidate_options:
+      - "サムネイルファイルを保存する"
+      - "原寸画像から都度生成する"
+    recommendation: "サムネイルファイルを保存する"
+
+  directory:
+    pattern: "/image_storage/{company_code}/{site_code}/{camera_code}/{date}/thumb/"
+    example: "/image_storage/company_000001/site_000001/camera_000001/2026-06-18/thumb/"
+
+  size:
+    status: "未決"
+    candidate_options:
+      - "固定幅200px"
+      - "固定幅240px"
+      - "画面サイズに応じた可変"
+    recommendation: "固定幅240px"
+
+  mime_type:
+    default: "image/jpeg"
+
+
+# ==============================================================================
+# 保存期間管理
+# ==============================================================================
+retention_management:
+  description: "カメラごとに設定された保存期間をもとに、期限切れ画像を削除する"
+
+  retention_setting:
+    unit: "days"
+    defined_on: "camera.retention_days"
+    minimum: 1
+
+  deletion_target:
+    - "original_image"
+    - "thumbnail_image"
+    - "captured_image_metadata"
+    - "camera_latest_image_if_target_deleted"
+    - "image_available_date_summary_if_count_zero"
+
+  deletion_timing:
+    status: "未決"
+    candidate_options:
+      - "日次バッチ"
+      - "時間単位バッチ"
+      - "画像取得処理後に同時実行"
+    recommendation: "日次バッチ"
+
+  deletion_rule:
+    description: "取得日が保存期間を超えた画像を削除対象とする"
+    example:
+      retention_days: 30
+      current_date: "2026-06-18"
+      delete_target: "2026-05-18以前の画像"
+
+  metadata_after_file_delete:
+    description: "画像ファイル削除後のメタデータ扱い"
+    status: "未決"
+    candidate_options:
+      - "メタデータも物理削除"
+      - "メタデータは削除済み状態で保持"
+    recommendation: "メタデータも物理削除"
+
+
+# ==============================================================================
+# 画像取得失敗時のデータ扱い
+# ==============================================================================
+capture_failure_data_handling:
+  description: "画像取得に失敗した場合のデータ保存方針"
+
+  captured_image_record_on_failure:
+    create: false
+    description: "画像ファイルが存在しないため、captured_imageには登録しない方針"
+
+  failure_log:
+    create: true
+    target_entity: "camera_capture_log"
+    description: "失敗内容はcamera_capture_logに記録する"
+
+  camera_status_update:
+    update_camera_last_capture_status: true
+    update_camera_latest_image_status: true
+
+  failure_reasons:
+    - "connection_timeout"
+    - "authentication_failed"
+    - "http_error"
+    - "invalid_image_data"
+    - "conversion_failed"
+    - "storage_failed"
+    - "unknown_error"
+
+
+# ==============================================================================
+# 日付・時刻仕様
+# ==============================================================================
+datetime_policy:
+  description: "日時管理の基本方針"
+
+  timezone:
+    default: "Asia/Tokyo"
+    storage_policy: "未決"
+    candidate_options:
+      - "DBにはUTCで保存し、画面表示時にJSTへ変換"
+      - "DBにもJSTで保存"
+    recommendation: "DBにはUTCで保存し、画面表示時にJSTへ変換"
+
+  display_timezone:
+    default: "Asia/Tokyo"
+
+  file_name_timezone:
+    default: "Asia/Tokyo"
+    description: "ファイル名に使用する日時は日本時間を想定"
+
+  date_folder_timezone:
+    default: "Asia/Tokyo"
+    description: "日付フォルダは日本時間の日付で作成する"
+
+
+# ==============================================================================
+# データ整合性ルール
+# ==============================================================================
+data_integrity_rules:
+  company_site_relation:
+    description: "現場は必ず1つの企業に所属する"
+    rule: "site.company_id must reference existing company.company_id"
+
+  site_camera_relation:
+    description: "カメラは必ず1つの現場に所属する"
+    rule: "camera.site_id must reference existing site.site_id"
+
+  camera_company_consistency:
+    description: "カメラのcompany_idは、所属現場のcompany_idと一致する必要がある"
+    rule: "camera.company_id == site.company_id"
+
+  user_scope_consistency:
+    description: "ユーザー権限に応じてcompany_id、site_idの必須性を制御する"
+    rule: "role_scope_rulesに従う"
+
+  captured_image_consistency:
+    description: "取得画像のcompany_id、site_id、camera_idはカメラ情報と一致する必要がある"
+    rule:
+      - "captured_image.camera_id references camera.camera_id"
+      - "captured_image.site_id == camera.site_id"
+      - "captured_image.company_id == camera.company_id"
+
+  file_path_consistency:
+    description: "captured_image.file_pathは、image_storage.hierarchyに従う"
+    rule: "file_path must match /image_storage/{company_code}/{site_code}/{camera_code}/{date}/{file_name}"
+
+
+# ==============================================================================
+# 権限別データ参照範囲
+# ==============================================================================
+data_access_scope:
+  system_admin:
+    description: "全企業・全現場・全カメラ・全画像にアクセス可能"
+    company_filter: "none"
+    site_filter: "none"
+    camera_filter: "none"
+
+  company_admin:
+    description: "所属企業配下の現場・カメラ・画像にアクセス可能"
+    company_filter: "user.company_id"
+    site_filter: "sites under user.company_id"
+    camera_filter: "cameras under user.company_id"
+
+  site_admin:
+    description: "所属現場配下のカメラ・画像にアクセス可能"
+    company_filter: "user.company_id"
+    site_filter: "user.site_id"
+    camera_filter: "cameras under user.site_id"
+
+  general_user:
+    description: "所属現場配下のカメラ・画像を閲覧可能"
+    company_filter: "user.company_id"
+    site_filter: "user.site_id"
+    camera_filter: "cameras under user.site_id"
+
+
+# ==============================================================================
+# 複数カメラ最新画像表示用データ取得方針
+# ==============================================================================
+multi_camera_latest_data:
+  description: "複数カメラ最新画像まとめ表示で使用するデータ"
+
+  selection_source:
+    description: "左側カメラメニューでチェックされたカメラID一覧"
+    data: "camera_id[]"
+
+  display_source:
+    primary_entity: "camera_latest_image"
+    fallback_entity: "captured_image"
+    description: "通常はcamera_latest_imageを参照し、必要に応じてcaptured_imageから最新画像を取得する"
+
+  required_fields_for_display:
+    - "camera_id"
+    - "camera_name"
+    - "latest_image_id"
+    - "latest_file_path"
+    - "latest_thumbnail_file_path"
+    - "latest_captured_at"
+    - "latest_status"
+    - "latest_error"
+
+  refresh:
+    data_update_source: "server_storage_and_metadata"
+    browser_direct_camera_access: false
+    note: "画面はカメラへ直接接続せず、サーバー側に保存された最新画像を取得する"
+
+
+# ==============================================================================
+# バリデーションルール
+# ==============================================================================
+validation_rules:
+  camera:
+    camera_name:
+      required: true
+      max_length: 100
+
+    address:
+      required: true
+      max_length: 2048
+      format:
+        - "http_url"
+        - "https_url"
+      note: "RTSP等を許可するかは未決"
+
+    auth_method:
+      required: true
+      allowed_values:
+        - "basic"
+
+    login_id:
+      required: true
+      max_length: 255
+
+    password:
+      required: true
+      max_length: 1024
+      storage: "encrypted"
+
+    capture_interval_minutes:
+      required: true
+      type: "integer"
+      min: 1
+
+    image_quality:
+      required: true
+      allowed_values:
+        - "VGA"
+        - "SVGA"
+        - "WXGA"
+        - "HD"
+        - "FullHD"
+        - "4K"
+
+    retention_days:
+      required: true
+      type: "integer"
+      min: 1
+
+  user:
+    login_id:
+      required: true
+      unique: true
+
+    role:
+      required: true
+      allowed_values:
+        - "system_admin"
+        - "company_admin"
+        - "site_admin"
+        - "general_user"
+
+    company_id:
+      required_by_role:
+        - "company_admin"
+        - "site_admin"
+        - "general_user"
+
+    site_id:
+      required_by_role:
+        - "site_admin"
+        - "general_user"
+
+
+# ==============================================================================
+# Ver0.8時点の確定事項
+# ==============================================================================
+confirmed_items:
+  - "管理情報はDBに保存する"
+  - "画像ファイル本体はDBに保存しない"
+  - "画像ファイルはサーバー上のファイルシステムに保存する"
+  - "画像保存階層は企業・現場・カメラ・日付単位とする"
+  - "カメラごとに取得間隔を保持する"
+  - "取得間隔の最小値は1分"
+  - "カメラごとに保存画質を保持する"
+  - "保存画質はサーバー側で変換する"
+  - "カメラごとに保存期間を保持する"
+  - "認証方式はVer0.8ではBASIC認証のみ"
+  - "カメラ接続用ID、パスワードを保持する"
+  - "パスワード変更は入力値で上書きする"
+  - "カメラ削除は可能"
+  - "接続テスト結果はログとして保持する方針"
+  - "画像取得失敗時は画像メタデータではなく取得ログに記録する"
+  - "複数カメラ最新画像まとめ表示では、サーバー保存済みの最新画像を参照する"
+  - "画像が存在する日付のみをカレンダーで選択可能にする"
+
+
+# ==============================================================================
+# 未決事項
+# ==============================================================================
+pending_items:
+  - id: "D001"
+    title: "DB種別"
+    description: "使用するDBが未決"
+    candidate_options:
+      - "PostgreSQL"
+      - "MySQL"
+      - "SQLite"
+      - "その他"
+
+  - id: "D002"
+    title: "内部ID方式"
+    description: "UUIDを使うかDB採番IDを使うか未決"
+    candidate_options:
+      - "UUID"
+      - "DB採番ID"
+    recommendation: "UUID"
+
+  - id: "D003"
+    title: "カメラ削除方式"
+    description: "カメラ削除を論理削除にするか物理削除にするか未決"
+    candidate_options:
+      - "論理削除"
+      - "物理削除"
+    recommendation: "論理削除"
+
+  - id: "D004"
+    title: "カメラ削除時の画像扱い"
+    description: "カメラ削除時に保存済み画像を残すか削除するか未決"
+    candidate_options:
+      - "画像は残す"
+      - "画像も削除する"
+      - "削除時にユーザーが選択する"
+    recommendation: "画像は残す"
+
+  - id: "D005"
+    title: "カメラ認証情報の暗号化方式"
+    description: "カメラ接続用パスワードの暗号化方式、秘密鍵管理方式が未決"
+    candidate_options:
+      - "アプリケーション暗号化"
+      - "OS・環境変数による鍵管理"
+      - "クラウドのシークレット管理サービス"
+      - "外部KMS"
+
+  - id: "D006"
+    title: "サムネイル生成タイミング"
+    description: "サムネイルを画像取得時に生成するか、画面表示時に生成するか未決"
+    candidate_options:
+      - "画像取得時に生成"
+      - "初回表示時に生成"
+      - "都度生成"
+    recommendation: "画像取得時に生成"
+
+  - id: "D007"
+    title: "サムネイル保存方式"
+    description: "サムネイルをファイルとして保存するか、原寸画像から都度生成するか未決"
+    candidate_options:
+      - "サムネイルファイル保存"
+      - "都度生成"
+    recommendation: "サムネイルファイル保存"
+
+  - id: "D008"
+    title: "保存期間超過時のメタデータ扱い"
+    description: "画像ファイル削除時にメタデータも削除するか、削除済み状態として残すか未決"
+    candidate_options:
+      - "メタデータも物理削除"
+      - "削除済み状態で保持"
+    recommendation: "メタデータも物理削除"
+
+  - id: "D009"
+    title: "画像存在日付の管理単位"
+    description: "画像が存在する日付を現場単位で管理するか、カメラ単位で管理するか未決"
+    candidate_options:
+      - "現場単位"
+      - "カメラ単位"
+      - "現場単位とカメラ単位の両方"
+    recommendation: "現場単位とカメラ単位の両方"
+
+  - id: "D010"
+    title: "取得画像の元画像保持"
+    description: "カメラから取得した変換前の元画像を保持するか未決"
+    candidate_options:
+      - "保持しない"
+      - "保持する"
+    recommendation: "保持しない"
+
+  - id: "D011"
+    title: "日時保存方針"
+    description: "DB保存時の日時をUTCにするかJSTにするか未決"
+    candidate_options:
+      - "UTC保存、JST表示"
+      - "JST保存"
+    recommendation: "UTC保存、JST表示"
+
+  - id: "D012"
+    title: "監査ログ要否"
+    description: "操作監査ログを正式に必須とするか未決"
+    candidate_options:
+      - "設定変更系のみ記録"
+      - "閲覧も含めて記録"
+      - "記録しない"
+    recommendation: "設定変更系のみ記録"
+
+  - id: "D013"
+    title: "取得失敗時のリトライ仕様"
+    description: "リトライ回数、間隔、失敗判定条件が未決"
+    candidate_options:
+      - "リトライなし"
+      - "1回リトライ"
+      - "3回リトライ"
+      - "カメラごとに設定可能"
+
+  - id: "D014"
+    title: "画像ファイル形式"
+    description: "保存形式をJPEG固定にするか、PNG等も許容するか未決"
+    candidate_options:
+      - "JPEG固定"
+      - "取得元形式を維持"
+      - "保存画質変換後はJPEGに統一"
+    recommendation: "JPEG固定"
+

@@ -1,0 +1,1805 @@
+# ==============================================================================
+# 04_api_spec.yaml
+# ==============================================================================
+# システム名:
+#   インターネットカメラ静止画管理システム
+#
+# 目的:
+#   本ファイルでは、フロントエンド画面とバックエンド間で使用するAPI仕様を定義する。
+#   ログイン、企業選択、現場選択、カメラ管理、画像参照、接続テスト、
+#   複数カメラ最新画像まとめ表示に必要なAPIを整理する。
+#
+# 本ファイルの位置づけ:
+#   - 01_overall_spec.yaml で定義した全体仕様をもとに、API仕様を定義する。
+#   - 02_data_spec.yaml で定義したデータ構造をAPI入出力に反映する。
+#   - 03_ui_spec.yaml で定義した画面操作に対応するAPIを定義する。
+#   - インフラ、バッチ、画像取得処理の詳細は 05_infra_spec.yaml に分割する。
+#
+# 分割ファイル構成:
+#   - 01_overall_spec.yaml : 全体仕様
+#   - 02_data_spec.yaml    : データ仕様・フォルダ構成・画像保存仕様
+#   - 03_ui_spec.yaml      : UI仕様・画面遷移・画面項目
+#   - 04_api_spec.yaml     : API仕様
+#   - 05_infra_spec.yaml   : インフラ仕様・バッチ・運用構成
+#
+# バージョン:
+#   Ver0.8
+#
+# 注意:
+#   本仕様は現時点の会話内容をもとにした初期整理版であり、
+#   未決事項は pending_items に明示する。
+# ==============================================================================
+
+
+# ==============================================================================
+# 修正履歴
+# ==============================================================================
+revision_history:
+  - version: "0.8"
+    date: "2026-06-18"
+    author: "ChatGPT"
+    changes:
+      - "初版作成"
+      - "REST API前提のAPI基本方針を定義"
+      - "ログイン、ログアウト、ログインユーザー情報取得APIを定義"
+      - "企業一覧取得、現場一覧取得APIを定義"
+      - "カメラ一覧取得、詳細取得、登録、更新、削除APIを定義"
+      - "カメラ接続テストAPIを定義"
+      - "画像存在日付一覧取得APIを定義"
+      - "サムネイル一覧取得APIを定義"
+      - "原寸画像取得APIを定義"
+      - "複数カメラ最新画像取得APIを定義"
+      - "権限チェック、エラー形式、共通レスポンス形式を定義"
+
+
+# ==============================================================================
+# API基本方針
+# ==============================================================================
+api_policy:
+  description: >
+    本システムのフロントエンドは、バックエンドAPIを通じて認証、企業・現場・カメラ情報、
+    画像メタデータ、画像ファイル参照情報を取得する。
+    画面はカメラに直接接続せず、カメラ接続および画像取得はサーバー側で実行する。
+
+  api_style: "REST"
+  request_format: "JSON"
+  response_format: "JSON"
+  image_response_format:
+    metadata: "JSON"
+    image_binary: "image/jpeg or static file response"
+
+  base_path: "/api/v1"
+
+  character_encoding: "UTF-8"
+
+  timezone:
+    request_timezone: "Asia/Tokyo"
+    response_timezone: "Asia/Tokyo"
+    internal_storage_timezone: "未決"
+    recommendation: "DBはUTC保存、APIレスポンスはAsia/Tokyo表示"
+
+  authentication:
+    required_by_default: true
+    method: "未決"
+    candidate_options:
+      - "Session認証"
+      - "JWT Bearer Token"
+    recommendation: "JWT Bearer Token"
+
+  authorization:
+    method: "Role Based Access Control"
+    roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+      - "general_user"
+
+  camera_direct_access_from_browser:
+    allowed: false
+    description: "ブラウザはカメラへ直接接続しない。カメラ認証情報もブラウザに返却しない"
+
+  api_versioning:
+    enabled: true
+    current_version: "v1"
+
+
+# ==============================================================================
+# 共通HTTPヘッダー
+# ==============================================================================
+common_headers:
+  request:
+    Content-Type:
+      value: "application/json"
+      required: true
+
+    Authorization:
+      value: "Bearer {access_token}"
+      required: true
+      note: "認証方式がJWTの場合。Session認証を採用する場合は未使用"
+
+    X-Request-Id:
+      value: "{request_id}"
+      required: false
+      description: "クライアントまたはサーバーで発行するリクエスト追跡ID"
+
+  response:
+    Content-Type:
+      value: "application/json"
+
+    X-Request-Id:
+      value: "{request_id}"
+      required: false
+
+
+# ==============================================================================
+# 共通レスポンス形式
+# ==============================================================================
+common_response:
+  success:
+    description: "正常レスポンスの基本形式"
+    schema:
+      success:
+        type: "boolean"
+        example: true
+      data:
+        type: "object"
+        description: "APIごとのレスポンスデータ"
+      message:
+        type: "string"
+        required: false
+        example: "OK"
+
+  error:
+    description: "異常レスポンスの基本形式"
+    schema:
+      success:
+        type: "boolean"
+        example: false
+      error:
+        type: "object"
+        fields:
+          code:
+            type: "string"
+            example: "VALIDATION_ERROR"
+          message:
+            type: "string"
+            example: "入力内容に誤りがあります"
+          details:
+            type: "array"
+            required: false
+            description: "項目別エラーなどの詳細"
+      request_id:
+        type: "string"
+        required: false
+
+  pagination:
+    description: "一覧APIで使用するページング形式"
+    schema:
+      page:
+        type: "integer"
+        example: 1
+      page_size:
+        type: "integer"
+        example: 50
+      total_count:
+        type: "integer"
+        example: 120
+      total_pages:
+        type: "integer"
+        example: 3
+
+
+# ==============================================================================
+# 共通ステータスコード
+# ==============================================================================
+http_status_codes:
+  "200":
+    name: "OK"
+    usage: "取得、更新、削除、接続テストなどが正常終了した場合"
+
+  "201":
+    name: "Created"
+    usage: "新規登録が正常終了した場合"
+
+  "400":
+    name: "Bad Request"
+    usage: "リクエスト形式不正、バリデーションエラー"
+
+  "401":
+    name: "Unauthorized"
+    usage: "未ログイン、認証トークン不正、認証期限切れ"
+
+  "403":
+    name: "Forbidden"
+    usage: "権限不足"
+
+  "404":
+    name: "Not Found"
+    usage: "対象データが存在しない、または権限範囲外"
+
+  "409":
+    name: "Conflict"
+    usage: "重複登録、状態不整合"
+
+  "500":
+    name: "Internal Server Error"
+    usage: "サーバー内部エラー"
+
+  "503":
+    name: "Service Unavailable"
+    usage: "画像取得処理、変換処理、ストレージなどの一時的な利用不可"
+
+
+# ==============================================================================
+# 共通エラーコード
+# ==============================================================================
+error_codes:
+  AUTH_REQUIRED:
+    message: "認証が必要です"
+
+  INVALID_CREDENTIALS:
+    message: "ログインIDまたはパスワードが正しくありません"
+
+  TOKEN_EXPIRED:
+    message: "認証期限が切れています"
+
+  FORBIDDEN:
+    message: "この操作を行う権限がありません"
+
+  NOT_FOUND:
+    message: "対象データが見つかりません"
+
+  VALIDATION_ERROR:
+    message: "入力内容に誤りがあります"
+
+  DUPLICATE_ERROR:
+    message: "重複するデータが存在します"
+
+  CAMERA_CONNECTION_FAILED:
+    message: "カメラへの接続に失敗しました"
+
+  CAMERA_AUTH_FAILED:
+    message: "カメラ認証に失敗しました"
+
+  CAMERA_TIMEOUT:
+    message: "カメラ接続がタイムアウトしました"
+
+  IMAGE_NOT_FOUND:
+    message: "画像が見つかりません"
+
+  IMAGE_CONVERSION_FAILED:
+    message: "画像変換に失敗しました"
+
+  STORAGE_ERROR:
+    message: "画像保存または読み込みに失敗しました"
+
+  INTERNAL_ERROR:
+    message: "サーバー内部エラーが発生しました"
+
+
+# ==============================================================================
+# API一覧
+# ==============================================================================
+api_list:
+  authentication:
+    - "POST /api/v1/auth/login"
+    - "POST /api/v1/auth/logout"
+    - "GET  /api/v1/auth/me"
+
+  company:
+    - "GET /api/v1/companies"
+
+  site:
+    - "GET /api/v1/sites"
+
+  camera:
+    - "GET    /api/v1/cameras"
+    - "GET    /api/v1/cameras/{camera_id}"
+    - "POST   /api/v1/cameras"
+    - "PUT    /api/v1/cameras/{camera_id}"
+    - "DELETE /api/v1/cameras/{camera_id}"
+    - "POST   /api/v1/cameras/test-connection"
+    - "POST   /api/v1/cameras/{camera_id}/test-connection"
+
+  image:
+    - "GET /api/v1/images/available-dates"
+    - "GET /api/v1/images/thumbnails"
+    - "GET /api/v1/images/{image_id}"
+    - "GET /api/v1/images/{image_id}/binary"
+    - "GET /api/v1/images/latest"
+    - "POST /api/v1/images/latest/bulk"
+
+  health:
+    - "GET /api/v1/health"
+
+
+# ==============================================================================
+# 認証API
+# ==============================================================================
+authentication_apis:
+  login:
+    api_id: "API_AUTH_001"
+    name: "ログインAPI"
+    method: "POST"
+    path: "/api/v1/auth/login"
+    authentication_required: false
+    description: "ログインID、パスワードを検証し、認証情報とログインユーザー情報を返却する"
+
+    request:
+      body:
+        login_id:
+          type: "string"
+          required: true
+          example: "admin"
+        password:
+          type: "string"
+          required: true
+          example: "password"
+
+    response:
+      success_status: 200
+      body:
+        success:
+          type: "boolean"
+          example: true
+        data:
+          type: "object"
+          fields:
+            access_token:
+              type: "string"
+              required: "認証方式がJWTの場合"
+            refresh_token:
+              type: "string"
+              required: false
+            user:
+              type: "object"
+              fields:
+                user_id:
+                  type: "string"
+                login_id:
+                  type: "string"
+                user_name:
+                  type: "string"
+                role:
+                  type: "string"
+                company_id:
+                  type: "string"
+                  nullable: true
+                site_id:
+                  type: "string"
+                  nullable: true
+                initial_screen:
+                  type: "string"
+                  example: "SCR_COMPANY_SELECT"
+
+    errors:
+      - status: 400
+        code: "VALIDATION_ERROR"
+      - status: 401
+        code: "INVALID_CREDENTIALS"
+
+  logout:
+    api_id: "API_AUTH_002"
+    name: "ログアウトAPI"
+    method: "POST"
+    path: "/api/v1/auth/logout"
+    authentication_required: true
+    description: "ログアウト処理を行う"
+
+    request:
+      body: {}
+
+    response:
+      success_status: 200
+      body:
+        success:
+          type: "boolean"
+          example: true
+        message:
+          type: "string"
+          example: "ログアウトしました"
+
+  me:
+    api_id: "API_AUTH_003"
+    name: "ログインユーザー情報取得API"
+    method: "GET"
+    path: "/api/v1/auth/me"
+    authentication_required: true
+    description: "現在ログイン中のユーザー情報と権限範囲を取得する"
+
+    response:
+      success_status: 200
+      body:
+        success:
+          type: "boolean"
+        data:
+          type: "object"
+          fields:
+            user_id:
+              type: "string"
+            login_id:
+              type: "string"
+            user_name:
+              type: "string"
+            role:
+              type: "string"
+            company_id:
+              type: "string"
+              nullable: true
+            site_id:
+              type: "string"
+              nullable: true
+            permissions:
+              type: "object"
+              fields:
+                view_images:
+                  type: "boolean"
+                view_latest_multi_camera:
+                  type: "boolean"
+                manage_cameras:
+                  type: "boolean"
+                add_camera:
+                  type: "boolean"
+                edit_camera:
+                  type: "boolean"
+                delete_camera:
+                  type: "boolean"
+                connection_test:
+                  type: "boolean"
+
+
+# ==============================================================================
+# 企業API
+# ==============================================================================
+company_apis:
+  list_companies:
+    api_id: "API_COMPANY_001"
+    name: "企業一覧取得API"
+    method: "GET"
+    path: "/api/v1/companies"
+    authentication_required: true
+    allowed_roles:
+      - "system_admin"
+    description: "システム管理者が選択可能な企業一覧を取得する"
+
+    query_parameters:
+      keyword:
+        type: "string"
+        required: false
+        description: "企業名検索キーワード"
+      status:
+        type: "string"
+        required: false
+        allowed_values:
+          - "active"
+          - "inactive"
+          - "deleted"
+        default: "active"
+      page:
+        type: "integer"
+        required: false
+        default: 1
+      page_size:
+        type: "integer"
+        required: false
+        default: 50
+
+    response:
+      success_status: 200
+      body:
+        success:
+          type: "boolean"
+        data:
+          type: "object"
+          fields:
+            companies:
+              type: "array"
+              items:
+                company_id:
+                  type: "string"
+                company_name:
+                  type: "string"
+                status:
+                  type: "string"
+                site_count:
+                  type: "integer"
+                  required: false
+                camera_count:
+                  type: "integer"
+                  required: false
+            pagination:
+              ref: "common_response.pagination"
+
+    errors:
+      - status: 403
+        code: "FORBIDDEN"
+
+
+# ==============================================================================
+# 現場API
+# ==============================================================================
+site_apis:
+  list_sites:
+    api_id: "API_SITE_001"
+    name: "現場一覧取得API"
+    method: "GET"
+    path: "/api/v1/sites"
+    authentication_required: true
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+    description: "権限範囲内の現場一覧を取得する"
+
+    query_parameters:
+      company_id:
+        type: "string"
+        required_condition: "system_adminの場合は指定可能。company_adminの場合はログインユーザーのcompany_idを使用"
+        description: "対象企業ID"
+      keyword:
+        type: "string"
+        required: false
+        description: "現場名検索キーワード"
+      status:
+        type: "string"
+        required: false
+        allowed_values:
+          - "active"
+          - "inactive"
+          - "deleted"
+        default: "active"
+      page:
+        type: "integer"
+        required: false
+        default: 1
+      page_size:
+        type: "integer"
+        required: false
+        default: 50
+
+    authorization_rule:
+      system_admin:
+        - "任意のcompany_idを指定可能"
+      company_admin:
+        - "自分のcompany_id配下のみ取得可能"
+      site_admin:
+        - "このAPIは通常使用しない"
+      general_user:
+        - "このAPIは使用不可"
+
+    response:
+      success_status: 200
+      body:
+        success:
+          type: "boolean"
+        data:
+          type: "object"
+          fields:
+            sites:
+              type: "array"
+              items:
+                site_id:
+                  type: "string"
+                company_id:
+                  type: "string"
+                site_name:
+                  type: "string"
+                status:
+                  type: "string"
+                camera_count:
+                  type: "integer"
+                  required: false
+                latest_captured_at:
+                  type: "datetime"
+                  required: false
+            pagination:
+              ref: "common_response.pagination"
+
+    errors:
+      - status: 403
+        code: "FORBIDDEN"
+
+
+# ==============================================================================
+# カメラAPI
+# ==============================================================================
+camera_apis:
+  list_cameras:
+    api_id: "API_CAMERA_001"
+    name: "カメラ一覧取得API"
+    method: "GET"
+    path: "/api/v1/cameras"
+    authentication_required: true
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+      - "general_user"
+    description: "権限範囲内の現場に登録されているカメラ一覧を取得する"
+
+    query_parameters:
+      company_id:
+        type: "string"
+        required_condition: "system_adminの場合は指定可能"
+      site_id:
+        type: "string"
+        required_condition: "system_admin、company_adminの場合は指定。site_admin、general_userはログインユーザーのsite_idを使用"
+      include_deleted:
+        type: "boolean"
+        required: false
+        default: false
+      keyword:
+        type: "string"
+        required: false
+        description: "カメラ名検索キーワード"
+
+    response:
+      success_status: 200
+      body:
+        success:
+          type: "boolean"
+        data:
+          type: "object"
+          fields:
+            cameras:
+              type: "array"
+              items:
+                camera_id:
+                  type: "string"
+                camera_name:
+                  type: "string"
+                address:
+                  type: "string"
+                  visible_roles:
+                    - "system_admin"
+                    - "company_admin"
+                    - "site_admin"
+                  hidden_roles:
+                    - "general_user"
+                auth_method:
+                  type: "string"
+                  visible_roles:
+                    - "system_admin"
+                    - "company_admin"
+                    - "site_admin"
+                  hidden_roles:
+                    - "general_user"
+                capture_interval_minutes:
+                  type: "integer"
+                image_quality:
+                  type: "string"
+                retention_days:
+                  type: "integer"
+                  visible_roles:
+                    - "system_admin"
+                    - "company_admin"
+                    - "site_admin"
+                  hidden_roles:
+                    - "general_user"
+                status:
+                  type: "string"
+                last_capture_at:
+                  type: "datetime"
+                  nullable: true
+                last_capture_status:
+                  type: "string"
+                  nullable: true
+                last_capture_error:
+                  type: "string"
+                  nullable: true
+
+    security_note:
+      - "カメラ接続用ID、パスワードは一覧APIでは返却しない"
+      - "一般ユーザーには管理用項目を返却しない、またはフロント側で非表示とする"
+
+  get_camera:
+    api_id: "API_CAMERA_002"
+    name: "カメラ詳細取得API"
+    method: "GET"
+    path: "/api/v1/cameras/{camera_id}"
+    authentication_required: true
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+    description: "カメラ再設定画面に表示するカメラ詳細情報を取得する"
+
+    path_parameters:
+      camera_id:
+        type: "string"
+        required: true
+
+    response:
+      success_status: 200
+      body:
+        success:
+          type: "boolean"
+        data:
+          type: "object"
+          fields:
+            camera_id:
+              type: "string"
+            company_id:
+              type: "string"
+            site_id:
+              type: "string"
+            camera_name:
+              type: "string"
+            address:
+              type: "string"
+            auth_method:
+              type: "string"
+              example: "basic"
+            login_id:
+              type: "string"
+              description: "カメラ接続用ID"
+            password:
+              type: "string"
+              returned: false
+              description: "パスワードは返却しない"
+            capture_interval_minutes:
+              type: "integer"
+            image_quality:
+              type: "string"
+            retention_days:
+              type: "integer"
+            status:
+              type: "string"
+
+    security_note:
+      - "暗号化済みパスワード、平文パスワードは返却しない"
+      - "再設定画面のパスワード欄は空欄表示とし、入力値で上書きする"
+
+  create_camera:
+    api_id: "API_CAMERA_003"
+    name: "カメラ登録API"
+    method: "POST"
+    path: "/api/v1/cameras"
+    authentication_required: true
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+    description: "新規カメラを登録する"
+
+    request:
+      body:
+        company_id:
+          type: "string"
+          required_condition: "system_adminの場合は指定。company_admin、site_adminは権限から補完可能"
+        site_id:
+          type: "string"
+          required: true
+        camera_name:
+          type: "string"
+          required: true
+          max_length: 100
+        address:
+          type: "string"
+          required: true
+          max_length: 2048
+        auth_method:
+          type: "string"
+          required: true
+          allowed_values:
+            - "basic"
+        login_id:
+          type: "string"
+          required: true
+          max_length: 255
+        password:
+          type: "string"
+          required: true
+          description: "サーバー側で暗号化して保存する"
+        capture_interval_minutes:
+          type: "integer"
+          required: true
+          minimum: 1
+        image_quality:
+          type: "string"
+          required: true
+          allowed_values:
+            - "VGA"
+            - "SVGA"
+            - "WXGA"
+            - "HD"
+            - "FullHD"
+            - "4K"
+        retention_days:
+          type: "integer"
+          required: true
+          minimum: 1
+
+    response:
+      success_status: 201
+      body:
+        success:
+          type: "boolean"
+        data:
+          type: "object"
+          fields:
+            camera_id:
+              type: "string"
+            camera_name:
+              type: "string"
+            status:
+              type: "string"
+        message:
+          type: "string"
+          example: "カメラを登録しました"
+
+    validation:
+      - "カメラ名必須"
+      - "アドレス必須"
+      - "認証方式はbasicのみ"
+      - "ID必須"
+      - "パスワード必須"
+      - "取得間隔は1分以上"
+      - "保存期間は1日以上"
+      - "保存画質は定義済み値のみ"
+
+  update_camera:
+    api_id: "API_CAMERA_004"
+    name: "カメラ更新API"
+    method: "PUT"
+    path: "/api/v1/cameras/{camera_id}"
+    authentication_required: true
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+    description: "既存カメラの設定を更新する。パスワードは入力値で上書きする"
+
+    path_parameters:
+      camera_id:
+        type: "string"
+        required: true
+
+    request:
+      body:
+        camera_name:
+          type: "string"
+          required: true
+        address:
+          type: "string"
+          required: true
+        auth_method:
+          type: "string"
+          required: true
+          allowed_values:
+            - "basic"
+        login_id:
+          type: "string"
+          required: true
+        password:
+          type: "string"
+          required: true
+          update_rule: "overwrite"
+          description: "入力値で既存パスワードを上書きする"
+        capture_interval_minutes:
+          type: "integer"
+          required: true
+          minimum: 1
+        image_quality:
+          type: "string"
+          required: true
+        retention_days:
+          type: "integer"
+          required: true
+          minimum: 1
+
+    response:
+      success_status: 200
+      body:
+        success:
+          type: "boolean"
+        data:
+          type: "object"
+          fields:
+            camera_id:
+              type: "string"
+            camera_name:
+              type: "string"
+            updated_at:
+              type: "datetime"
+        message:
+          type: "string"
+          example: "カメラ設定を保存しました"
+
+    notes:
+      - "パスワード未入力時に既存維持するかはUI仕様では未決だが、Ver0.8のAPIでは入力値上書き前提とする"
+      - "保存画質変更後は、次回取得画像から新しい保存画質を適用する"
+
+  delete_camera:
+    api_id: "API_CAMERA_005"
+    name: "カメラ削除API"
+    method: "DELETE"
+    path: "/api/v1/cameras/{camera_id}"
+    authentication_required: true
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+    description: "指定カメラを削除する"
+
+    path_parameters:
+      camera_id:
+        type: "string"
+        required: true
+
+    query_parameters:
+      delete_images:
+        type: "boolean"
+        required: false
+        default: false
+        description: "保存済み画像も削除するか。Ver0.8では未決のためデフォルトfalseを推奨"
+
+    delete_policy:
+      method: "未決"
+      recommendation: "logical_delete"
+      default_image_handling: "画像は削除しない"
+
+    response:
+      success_status: 200
+      body:
+        success:
+          type: "boolean"
+        message:
+          type: "string"
+          example: "カメラを削除しました"
+
+  test_connection_by_input:
+    api_id: "API_CAMERA_006"
+    name: "入力値によるカメラ接続テストAPI"
+    method: "POST"
+    path: "/api/v1/cameras/test-connection"
+    authentication_required: true
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+    description: "カメラ登録・再設定フォームに入力中の情報を使って接続テストを実行する"
+
+    request:
+      body:
+        company_id:
+          type: "string"
+          required_condition: "system_adminの場合"
+        site_id:
+          type: "string"
+          required: true
+        address:
+          type: "string"
+          required: true
+        auth_method:
+          type: "string"
+          required: true
+          allowed_values:
+            - "basic"
+        login_id:
+          type: "string"
+          required: true
+        password:
+          type: "string"
+          required: true
+
+    response:
+      success_status: 200
+      body:
+        success:
+          type: "boolean"
+        data:
+          type: "object"
+          fields:
+            result:
+              type: "string"
+              allowed_values:
+                - "success"
+                - "failed"
+            http_status_code:
+              type: "integer"
+              nullable: true
+            response_time_ms:
+              type: "integer"
+              nullable: true
+            message:
+              type: "string"
+            preview_image_url:
+              type: "string"
+              nullable: true
+              description: "接続テスト成功時にプレビュー画像を返す場合に使用"
+            error_code:
+              type: "string"
+              nullable: true
+
+    security_note:
+      - "リクエストされたパスワードはログに平文保存しない"
+      - "接続テスト結果ログにもパスワードを保存しない"
+
+  test_connection_by_camera_id:
+    api_id: "API_CAMERA_007"
+    name: "登録済みカメラ接続テストAPI"
+    method: "POST"
+    path: "/api/v1/cameras/{camera_id}/test-connection"
+    authentication_required: true
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+    description: "登録済みのカメラ設定を使用して接続テストを実行する"
+
+    path_parameters:
+      camera_id:
+        type: "string"
+        required: true
+
+    response:
+      success_status: 200
+      body:
+        success:
+          type: "boolean"
+        data:
+          type: "object"
+          fields:
+            result:
+              type: "string"
+              allowed_values:
+                - "success"
+                - "failed"
+            http_status_code:
+              type: "integer"
+              nullable: true
+            response_time_ms:
+              type: "integer"
+              nullable: true
+            message:
+              type: "string"
+            preview_image_url:
+              type: "string"
+              nullable: true
+            error_code:
+              type: "string"
+              nullable: true
+
+
+# ==============================================================================
+# 画像API
+# ==============================================================================
+image_apis:
+  get_available_dates:
+    api_id: "API_IMAGE_001"
+    name: "画像存在日付一覧取得API"
+    method: "GET"
+    path: "/api/v1/images/available-dates"
+    authentication_required: true
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+      - "general_user"
+    description: "カレンダーで選択可能にするため、画像が存在する日付一覧を取得する"
+
+    query_parameters:
+      company_id:
+        type: "string"
+        required_condition: "system_adminの場合は指定可能"
+      site_id:
+        type: "string"
+        required_condition: "system_admin、company_adminの場合は指定。site_admin、general_userは権限から補完"
+      camera_id:
+        type: "string"
+        required: false
+        description: "特定カメラの画像存在日付を取得する場合に指定"
+      from_date:
+        type: "date"
+        required: false
+        example: "2026-06-01"
+      to_date:
+        type: "date"
+        required: false
+        example: "2026-06-30"
+
+    response:
+      success_status: 200
+      body:
+        success:
+          type: "boolean"
+        data:
+          type: "object"
+          fields:
+            available_dates:
+              type: "array"
+              items:
+                date:
+                  type: "date"
+                  example: "2026-06-18"
+                image_count:
+                  type: "integer"
+                  example: 1440
+                latest_captured_at:
+                  type: "datetime"
+                  example: "2026-06-18T14:30:00+09:00"
+            default_date:
+              type: "date"
+              description: "最新画像が存在する日付"
+
+    notes:
+      - "画像が存在しない日は返却しない"
+      - "画面側は返却された日付のみ選択可能にする"
+
+  get_thumbnails:
+    api_id: "API_IMAGE_002"
+    name: "サムネイル一覧取得API"
+    method: "GET"
+    path: "/api/v1/images/thumbnails"
+    authentication_required: true
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+      - "general_user"
+    description: "指定カメラ、指定日付のサムネイル一覧を取得する"
+
+    query_parameters:
+      camera_id:
+        type: "string"
+        required: true
+      date:
+        type: "date"
+        required: true
+        example: "2026-06-18"
+      sort:
+        type: "string"
+        required: false
+        allowed_values:
+          - "captured_at_asc"
+          - "captured_at_desc"
+        default: "captured_at_desc"
+      page:
+        type: "integer"
+        required: false
+        default: 1
+      page_size:
+        type: "integer"
+        required: false
+        default: 100
+
+    response:
+      success_status: 200
+      body:
+        success:
+          type: "boolean"
+        data:
+          type: "object"
+          fields:
+            camera:
+              type: "object"
+              fields:
+                camera_id:
+                  type: "string"
+                camera_name:
+                  type: "string"
+            date:
+              type: "date"
+            images:
+              type: "array"
+              items:
+                image_id:
+                  type: "string"
+                captured_at:
+                  type: "datetime"
+                thumbnail_url:
+                  type: "string"
+                image_url:
+                  type: "string"
+                  description: "原寸画像表示用APIまたはURL"
+                image_quality:
+                  type: "string"
+                width:
+                  type: "integer"
+                  nullable: true
+                height:
+                  type: "integer"
+                  nullable: true
+            pagination:
+              ref: "common_response.pagination"
+
+    notes:
+      - "サムネイル画像そのものではなく、サムネイルURLまたは画像取得APIのURLを返却する"
+      - "サムネイルをファイル保存するか動的生成するかは02_data_spec.yamlの未決事項に従う"
+
+  get_image_metadata:
+    api_id: "API_IMAGE_003"
+    name: "画像メタデータ取得API"
+    method: "GET"
+    path: "/api/v1/images/{image_id}"
+    authentication_required: true
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+      - "general_user"
+    description: "原寸画像表示画面で使用する画像メタデータを取得する"
+
+    path_parameters:
+      image_id:
+        type: "string"
+        required: true
+
+    response:
+      success_status: 200
+      body:
+        success:
+          type: "boolean"
+        data:
+          type: "object"
+          fields:
+            image_id:
+              type: "string"
+            company_id:
+              type: "string"
+            site_id:
+              type: "string"
+            camera_id:
+              type: "string"
+            camera_name:
+              type: "string"
+            captured_at:
+              type: "datetime"
+            image_url:
+              type: "string"
+            thumbnail_url:
+              type: "string"
+              nullable: true
+            image_quality:
+              type: "string"
+            width:
+              type: "integer"
+              nullable: true
+            height:
+              type: "integer"
+              nullable: true
+            file_size_bytes:
+              type: "integer"
+              nullable: true
+
+  get_image_binary:
+    api_id: "API_IMAGE_004"
+    name: "画像バイナリ取得API"
+    method: "GET"
+    path: "/api/v1/images/{image_id}/binary"
+    authentication_required: true
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+      - "general_user"
+    description: "指定画像のバイナリデータを返却する"
+
+    path_parameters:
+      image_id:
+        type: "string"
+        required: true
+
+    query_parameters:
+      type:
+        type: "string"
+        required: false
+        allowed_values:
+          - "original"
+          - "thumbnail"
+        default: "original"
+
+    response:
+      success_status: 200
+      content_type:
+        - "image/jpeg"
+      body: "binary"
+
+    errors:
+      - status: 404
+        code: "IMAGE_NOT_FOUND"
+      - status: 403
+        code: "FORBIDDEN"
+
+    notes:
+      - "画像ファイルを直接Webサーバーから配信する方式を採用する場合、本APIは署名付きURL発行APIに変更可能"
+      - "ダウンロード可否は未決"
+
+  get_latest_image:
+    api_id: "API_IMAGE_005"
+    name: "単一カメラ最新画像取得API"
+    method: "GET"
+    path: "/api/v1/images/latest"
+    authentication_required: true
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+      - "general_user"
+    description: "指定カメラの最新画像情報を取得する"
+
+    query_parameters:
+      camera_id:
+        type: "string"
+        required: true
+
+    response:
+      success_status: 200
+      body:
+        success:
+          type: "boolean"
+        data:
+          type: "object"
+          fields:
+            camera_id:
+              type: "string"
+            camera_name:
+              type: "string"
+            latest_status:
+              type: "string"
+              allowed_values:
+                - "success"
+                - "failed"
+                - "not_yet"
+            latest_image_id:
+              type: "string"
+              nullable: true
+            latest_captured_at:
+              type: "datetime"
+              nullable: true
+            latest_image_url:
+              type: "string"
+              nullable: true
+            latest_thumbnail_url:
+              type: "string"
+              nullable: true
+            latest_error:
+              type: "string"
+              nullable: true
+
+  get_latest_images_bulk:
+    api_id: "API_IMAGE_006"
+    name: "複数カメラ最新画像取得API"
+    method: "POST"
+    path: "/api/v1/images/latest/bulk"
+    authentication_required: true
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+      - "general_user"
+    description: "複数カメラ最新画像まとめ表示画面で使用する、複数カメラの最新画像情報を取得する"
+
+    request:
+      body:
+        camera_ids:
+          type: "array"
+          required: true
+          min_items: 1
+          items:
+            type: "string"
+
+    response:
+      success_status: 200
+      body:
+        success:
+          type: "boolean"
+        data:
+          type: "object"
+          fields:
+            server_time:
+              type: "datetime"
+              description: "API応答時点のサーバー時刻"
+            cameras:
+              type: "array"
+              items:
+                camera_id:
+                  type: "string"
+                camera_name:
+                  type: "string"
+                latest_status:
+                  type: "string"
+                  allowed_values:
+                    - "success"
+                    - "failed"
+                    - "not_yet"
+                latest_image_id:
+                  type: "string"
+                  nullable: true
+                latest_captured_at:
+                  type: "datetime"
+                  nullable: true
+                latest_image_url:
+                  type: "string"
+                  nullable: true
+                latest_thumbnail_url:
+                  type: "string"
+                  nullable: true
+                latest_error:
+                  type: "string"
+                  nullable: true
+
+    authorization_rule:
+      description: "指定されたcamera_idsのうち、ログインユーザーの権限範囲外のカメラは返却しない、または403とする"
+      candidate_options:
+        - "権限外カメラが含まれる場合は403"
+        - "権限内カメラのみ返却"
+      recommendation: "権限外カメラが含まれる場合は403"
+
+    notes:
+      - "複数カメラ最新画像画面は、このAPIを定期的に呼び出して表示を更新する"
+      - "画面はカメラに直接接続しない"
+
+
+# ==============================================================================
+# ヘルスチェックAPI
+# ==============================================================================
+health_apis:
+  health_check:
+    api_id: "API_HEALTH_001"
+    name: "ヘルスチェックAPI"
+    method: "GET"
+    path: "/api/v1/health"
+    authentication_required: false
+    description: "アプリケーションの稼働状態を確認する"
+
+    response:
+      success_status: 200
+      body:
+        success:
+          type: "boolean"
+          example: true
+        data:
+          type: "object"
+          fields:
+            status:
+              type: "string"
+              example: "ok"
+            server_time:
+              type: "datetime"
+            version:
+              type: "string"
+              example: "0.8"
+
+
+# ==============================================================================
+# 権限別APIアクセス制御
+# ==============================================================================
+role_based_api_access:
+  system_admin:
+    allowed_api_groups:
+      - "authentication"
+      - "company"
+      - "site"
+      - "camera"
+      - "image"
+      - "health"
+    access_scope:
+      companies: "all"
+      sites: "all"
+      cameras: "all"
+      images: "all"
+
+  company_admin:
+    allowed_api_groups:
+      - "authentication"
+      - "site"
+      - "camera"
+      - "image"
+      - "health"
+    denied_api_groups:
+      - "company"
+    access_scope:
+      companies: "own_company"
+      sites: "own_company_sites"
+      cameras: "own_company_cameras"
+      images: "own_company_images"
+
+  site_admin:
+    allowed_api_groups:
+      - "authentication"
+      - "camera"
+      - "image"
+      - "health"
+    denied_api_groups:
+      - "company"
+      - "site"
+    access_scope:
+      companies: "own_company"
+      sites: "own_site"
+      cameras: "own_site_cameras"
+      images: "own_site_images"
+
+  general_user:
+    allowed_api_groups:
+      - "authentication"
+      - "image"
+      - "health"
+    limited_camera_api_access:
+      - "GET /api/v1/cameras"
+    denied_api_groups:
+      - "company"
+      - "site"
+      - "camera_management"
+    access_scope:
+      companies: "own_company"
+      sites: "own_site"
+      cameras: "own_site_cameras"
+      images: "own_site_images"
+    denied_operations:
+      - "カメラ登録"
+      - "カメラ更新"
+      - "カメラ削除"
+      - "接続テスト"
+
+
+# ==============================================================================
+# 入力バリデーションルール
+# ==============================================================================
+validation_rules:
+  camera:
+    camera_name:
+      required: true
+      max_length: 100
+
+    address:
+      required: true
+      max_length: 2048
+      allowed_schemes:
+        - "http"
+        - "https"
+      message: "アドレスはHTTPまたはHTTPS形式で指定してください"
+
+    auth_method:
+      required: true
+      allowed_values:
+        - "basic"
+
+    login_id:
+      required: true
+      max_length: 255
+
+    password:
+      required: true
+      max_length: 1024
+      note: "サーバー側で暗号化保存する。ログ出力禁止"
+
+    capture_interval_minutes:
+      required: true
+      type: "integer"
+      minimum: 1
+
+    image_quality:
+      required: true
+      allowed_values:
+        - "VGA"
+        - "SVGA"
+        - "WXGA"
+        - "HD"
+        - "FullHD"
+        - "4K"
+
+    retention_days:
+      required: true
+      type: "integer"
+      minimum: 1
+
+  image:
+    date:
+      format: "YYYY-MM-DD"
+      required: true
+
+    camera_ids:
+      type: "array"
+      min_items: 1
+
+
+# ==============================================================================
+# セキュリティ仕様
+# ==============================================================================
+security:
+  camera_credentials:
+    return_password_to_client: false
+    return_encrypted_password_to_client: false
+    log_plain_password: false
+    store_password_encrypted: true
+    encryption_method: "未決"
+
+  image_access:
+    description: "画像取得APIでは、必ずログインユーザーの権限範囲を確認する"
+    direct_file_url_public_access: false
+    recommendation: "画像URLは認証付きAPI経由、または期限付きURLとする"
+
+  authorization_checks:
+    company_scope_check: true
+    site_scope_check: true
+    camera_scope_check: true
+    image_scope_check: true
+
+  audit_log:
+    enabled: "未決"
+    target_operations_candidates:
+      - "ログイン"
+      - "カメラ登録"
+      - "カメラ更新"
+      - "カメラ削除"
+      - "接続テスト"
+      - "原寸画像表示"
+
+
+# ==============================================================================
+# APIと画面の対応関係
+# ==============================================================================
+screen_api_mapping:
+  SCR_LOGIN:
+    used_apis:
+      - "POST /api/v1/auth/login"
+
+  SCR_COMPANY_SELECT:
+    used_apis:
+      - "GET /api/v1/companies"
+
+  SCR_SITE_SELECT:
+    used_apis:
+      - "GET /api/v1/sites"
+
+  SCR_CAMERA_THUMBNAIL:
+    used_apis:
+      - "GET /api/v1/cameras"
+      - "GET /api/v1/images/available-dates"
+      - "GET /api/v1/images/thumbnails"
+      - "GET /api/v1/images/{image_id}"
+
+  SCR_ORIGINAL_IMAGE_VIEW:
+    used_apis:
+      - "GET /api/v1/images/{image_id}"
+      - "GET /api/v1/images/{image_id}/binary"
+
+  SCR_CAMERA_SETTING:
+    used_apis:
+      - "GET /api/v1/cameras"
+      - "DELETE /api/v1/cameras/{camera_id}"
+      - "POST /api/v1/cameras/{camera_id}/test-connection"
+
+  SCR_CAMERA_FORM:
+    used_apis:
+      - "GET /api/v1/cameras/{camera_id}"
+      - "POST /api/v1/cameras"
+      - "PUT /api/v1/cameras/{camera_id}"
+      - "POST /api/v1/cameras/test-connection"
+
+  SCR_MULTI_CAMERA_LATEST:
+    used_apis:
+      - "POST /api/v1/images/latest/bulk"
+      - "GET /api/v1/images/{image_id}/binary"
+
+
+# ==============================================================================
+# Ver0.8時点の確定事項
+# ==============================================================================
+confirmed_items:
+  - "APIはREST形式を前提とする"
+  - "APIのベースパスは /api/v1 とする"
+  - "フロントエンドはカメラへ直接接続しない"
+  - "カメラ認証情報はクライアントへ返却しない"
+  - "カメラ接続と接続テストはサーバー側で実行する"
+  - "ログインAPIを定義する"
+  - "ログイン後の初期画面はユーザー権限に応じて返却する"
+  - "システム管理者向けに企業一覧取得APIを定義する"
+  - "システム管理者、企業管理者向けに現場一覧取得APIを定義する"
+  - "権限範囲内のカメラ一覧取得APIを定義する"
+  - "カメラ登録APIを定義する"
+  - "カメラ更新APIを定義する"
+  - "カメラ削除APIを定義する"
+  - "カメラ接続テストAPIを定義する"
+  - "画像が存在する日付一覧取得APIを定義する"
+  - "サムネイル一覧取得APIを定義する"
+  - "原寸画像表示用APIを定義する"
+  - "複数カメラ最新画像取得APIを定義する"
+  - "一般ユーザーはカメラ管理APIを実行不可とする"
+  - "画像取得APIでは必ず権限範囲をチェックする"
+
+
+# ==============================================================================
+# 未決事項
+# ==============================================================================
+pending_items:
+  - id: "A001"
+    title: "認証方式"
+    description: "Session認証にするかJWT Bearer Tokenにするか未決"
+    candidate_options:
+      - "Session認証"
+      - "JWT Bearer Token"
+    recommendation: "JWT Bearer Token"
+
+  - id: "A002"
+    title: "リフレッシュトークン要否"
+    description: "JWT採用時にリフレッシュトークンを使用するか未決"
+    candidate_options:
+      - "使用する"
+      - "使用しない"
+
+  - id: "A003"
+    title: "画像配信方式"
+    description: "画像をAPIでバイナリ返却するか、認証付き静的配信または期限付きURLにするか未決"
+    candidate_options:
+      - "APIでバイナリ返却"
+      - "認証付き静的配信"
+      - "期限付きURL"
+    recommendation: "認証付き静的配信または期限付きURL"
+
+  - id: "A004"
+    title: "カメラ削除方式"
+    description: "カメラ削除APIを論理削除にするか物理削除にするか未決"
+    candidate_options:
+      - "論理削除"
+      - "物理削除"
+    recommendation: "論理削除"
+
+  - id: "A005"
+    title: "カメラ削除時の画像削除可否"
+    description: "カメラ削除APIで保存済み画像も削除可能にするか未決"
+    candidate_options:
+      - "画像は削除しない"
+      - "画像も削除可能"
+      - "削除時に指定可能"
+    recommendation: "画像は削除しない"
+
+  - id: "A006"
+    title: "接続テスト成功時のプレビュー画像返却"
+    description: "接続テスト成功時にプレビュー画像URLを返却するか未決"
+    candidate_options:
+      - "返却する"
+      - "返却しない"
+    recommendation: "返却する"
+
+  - id: "A007"
+    title: "保存前接続テスト必須化"
+    description: "カメラ登録・更新前に接続テスト成功を必須にするか未決"
+    candidate_options:
+      - "必須"
+      - "任意"
+    recommendation: "任意"
+
+  - id: "A008"
+    title: "画像存在日付の判定単位"
+    description: "画像存在日付一覧APIを現場単位、カメラ単位、両方対応のどれにするか未決"
+    candidate_options:
+      - "現場単位"
+      - "カメラ単位"
+      - "両方対応"
+    recommendation: "両方対応"
+
+  - id: "A009"
+    title: "複数カメラ最新画像APIの権限外カメラ扱い"
+    description: "リクエスト内に権限外カメラが含まれる場合の扱いが未決"
+    candidate_options:
+      - "403を返す"
+      - "権限内カメラのみ返す"
+    recommendation: "403を返す"
+
+  - id: "A010"
+    title: "APIページング上限"
+    description: "一覧APIのpage_size最大値が未決"
+    candidate_options:
+      - "100"
+      - "200"
+      - "500"
+    recommendation: "200"
+
+  - id: "A011"
+    title: "監査ログAPI"
+    description: "監査ログ参照APIを管理画面に提供するか未決"
+    candidate_options:
+      - "提供する"
+      - "提供しない"
+      - "後続バージョンで追加"
+
+  - id: "A012"
+    title: "企業・現場管理API"
+    description: "企業、現場の登録・更新・削除APIをVer0.8に含めるか未決"
+    candidate_options:
+      - "含める"
+      - "後続バージョンで追加"
+      - "DB管理または別管理画面で対応"
+

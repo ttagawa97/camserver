@@ -1,0 +1,1465 @@
+# ==============================================================================
+# 05_infra_spec.yaml
+# ==============================================================================
+# システム名:
+#   インターネットカメラ静止画管理システム
+#
+# 目的:
+#   本ファイルでは、システムのインフラ構成、開発環境構成、
+#   画像取得処理、スケジューラー、画像変換処理、ファイル保存、
+#   保存期間超過画像の削除処理、ログ、監視、バックアップ方針を定義する。
+#
+# 本ファイルの位置づけ:
+#   - 01_overall_spec.yaml で定義した全体仕様をもとに、インフラ・実行基盤を定義する。
+#   - 02_data_spec.yaml で定義した画像保存・データ仕様を実行環境に反映する。
+#   - 03_ui_spec.yaml で定義した画面表示に必要な画像配信方式を整理する。
+#   - 04_api_spec.yaml で定義したAPIを動作させるための開発環境を定義する。
+#
+# 分割ファイル構成:
+#   - 01_overall_spec.yaml : 全体仕様
+#   - 02_data_spec.yaml    : データ仕様・フォルダ構成・画像保存仕様
+#   - 03_ui_spec.yaml      : UI仕様・画面遷移・画面項目
+#   - 04_api_spec.yaml     : API仕様
+#   - 05_infra_spec.yaml   : インフラ仕様・バッチ・運用構成
+#
+# バージョン:
+#   Ver0.8
+#
+# 重要方針:
+#   - Ver0.8では開発環境のみ定義する。
+#   - 本番環境はAWS Lambda、S3で実装する想定だが、Ver0.8ではペンディングとする。
+#   - 本番環境の詳細設計、AWS構成、Lambda分割、S3パス設計、認証連携、
+#     CloudWatch監視、IAM、VPC構成などは後続バージョンで定義する。
+#
+# 注意:
+#   本仕様は現時点の会話内容をもとにした初期整理版であり、
+#   未決事項は pending_items に明示する。
+# ==============================================================================
+
+
+# ==============================================================================
+# 修正履歴
+# ==============================================================================
+revision_history:
+  - version: "0.8"
+    date: "2026-06-18"
+    author: "ChatGPT"
+    changes:
+      - "初版作成"
+      - "開発環境のみを定義対象として整理"
+      - "本番環境はAWS Lambda、S3想定だがペンディングとして明記"
+      - "開発環境はDocker Compose構成を前提として定義"
+      - "Webフロントエンド、APIサーバー、DB、画像取得ワーカー、スケジューラー、Redisを構成要素として定義"
+      - "画像保存先は開発環境ローカルボリュームと定義"
+      - "画像取得処理、接続テスト、画像変換、サムネイル生成、保存期間削除処理を定義"
+      - "ログ、バックアップ、監視、環境変数、開発用ディレクトリ構成を定義"
+
+
+# ==============================================================================
+# 環境定義方針
+# ==============================================================================
+environment_policy:
+  description: >
+    Ver0.8では開発環境のみを定義する。
+    本番環境はAWS Lambda、S3を利用する想定だが、具体的な構成は未決とし、
+    本ファイルではペンディングとして管理する。
+
+  defined_environments:
+    development:
+      name: "開発環境"
+      status: "defined"
+      description: "ローカルPCまたは開発サーバー上でDocker Composeにより動作させる環境"
+
+    production:
+      name: "本番環境"
+      status: "pending"
+      expected_platform:
+        - "AWS Lambda"
+        - "Amazon S3"
+      description: "本番環境はAWS Lambda、S3で実装する想定だが、Ver0.8では定義対象外"
+
+  target_of_this_file:
+    - "開発環境構成"
+    - "開発環境のコンテナ構成"
+    - "開発環境の画像保存方式"
+    - "開発環境の画像取得処理"
+    - "開発環境の画像変換処理"
+    - "開発環境の保存期間削除処理"
+    - "開発環境のログ出力"
+    - "開発環境の起動・停止方針"
+
+  out_of_scope_in_ver_0_8:
+    - "本番AWS構成"
+    - "AWS Lambda関数分割"
+    - "Amazon S3バケット設計"
+    - "Amazon CloudWatch監視"
+    - "IAMロール・ポリシー"
+    - "VPC、Subnet、Security Group"
+    - "本番用認証基盤"
+    - "本番用バックアップ設計"
+    - "本番用高可用性設計"
+    - "本番用コスト見積"
+
+
+# ==============================================================================
+# 開発環境概要
+# ==============================================================================
+development_environment:
+  name: "開発環境"
+  status: "defined"
+
+  execution_platform:
+    type: "Docker Compose"
+    description: "ローカルまたは開発サーバー上で複数コンテナを起動する"
+
+  assumed_host:
+    os:
+      - "Windows + WSL Ubuntu"
+      - "Linux"
+      - "macOS"
+    recommended: "Windows + WSL Ubuntu または Linux"
+    note: "ユーザーの開発スタイルを考慮し、WSL Ubuntu上でのDocker Compose利用を想定"
+
+  development_purpose:
+    - "API開発"
+    - "UI開発"
+    - "カメラ登録・設定画面の確認"
+    - "カメラ接続テストの確認"
+    - "画像取得バッチの動作確認"
+    - "サーバー側画像変換の動作確認"
+    - "サムネイル生成の動作確認"
+    - "保存期間削除処理の動作確認"
+
+  target_scale:
+    camera_count:
+      production_assumption: "約100台程度"
+      development_default: "数台〜10台程度"
+      development_stress_test: "最大100台相当の疑似カメラまたはテストURLで確認"
+
+    minimum_capture_interval:
+      value: "1分"
+      note: "開発環境でも最短1分取得を再現可能とする"
+
+  image_storage:
+    type: "local_filesystem"
+    root_directory: "/app/storage/images"
+    mounted_to_host: true
+    description: "開発環境ではコンテナ内パスをホスト側ディレクトリへマウントする"
+
+
+# ==============================================================================
+# 開発環境コンテナ構成
+# ==============================================================================
+development_containers:
+  description: "開発環境はDocker Composeで複数コンテナを起動する"
+
+  services:
+    frontend:
+      name: "frontend"
+      role: "Webフロントエンド"
+      technology_candidates:
+        - "React"
+        - "TypeScript"
+      default_port: 3000
+      description: "ログイン、企業選択、現場選択、カメラ一覧、画像表示、設定画面を提供する"
+      depends_on:
+        - "backend"
+
+    backend:
+      name: "backend"
+      role: "APIサーバー"
+      technology_candidates:
+        - "Django"
+        - "Django REST Framework"
+        - "FastAPI"
+      recommendation: "Django REST Framework"
+      default_port: 8000
+      description: "認証、企業・現場・カメラ管理、画像メタデータ、画像配信APIを提供する"
+      depends_on:
+        - "db"
+        - "redis"
+      mounted_volumes:
+        - "image_storage"
+        - "log_storage"
+
+    db:
+      name: "db"
+      role: "開発用DB"
+      technology_candidates:
+        - "PostgreSQL"
+      recommendation: "PostgreSQL"
+      default_port: 5432
+      description: "企業、現場、ユーザー、カメラ設定、画像メタデータ、ログ情報を保存する"
+
+    redis:
+      name: "redis"
+      role: "ジョブキュー・スケジューラー補助"
+      technology_candidates:
+        - "Redis"
+      default_port: 6379
+      description: "画像取得ジョブ、非同期処理、スケジューラー連携に使用する"
+
+    worker:
+      name: "worker"
+      role: "画像取得ワーカー"
+      technology_candidates:
+        - "Celery Worker"
+        - "Python Worker"
+      recommendation: "Celery Worker"
+      description: "カメラから静止画を取得し、画像変換、保存、メタデータ登録を行う"
+      depends_on:
+        - "backend"
+        - "db"
+        - "redis"
+      mounted_volumes:
+        - "image_storage"
+        - "log_storage"
+
+    scheduler:
+      name: "scheduler"
+      role: "画像取得スケジューラー"
+      technology_candidates:
+        - "Celery Beat"
+        - "APScheduler"
+        - "cron"
+      recommendation: "Celery Beat"
+      description: "カメラごとの取得間隔に基づき、画像取得ジョブを定期投入する"
+      depends_on:
+        - "db"
+        - "redis"
+
+    nginx:
+      name: "nginx"
+      role: "開発用リバースプロキシ・静的ファイル配信"
+      status: "optional"
+      default_port: 80
+      description: "フロントエンド、API、画像ファイル配信を同一オリジンにまとめる場合に使用する"
+      depends_on:
+        - "frontend"
+        - "backend"
+
+  required_services_minimum:
+    - "frontend"
+    - "backend"
+    - "db"
+    - "redis"
+    - "worker"
+    - "scheduler"
+
+  optional_services:
+    - "nginx"
+
+
+# ==============================================================================
+# 開発環境ネットワーク構成
+# ==============================================================================
+development_network:
+  type: "docker_compose_network"
+  network_name: "camera_manager_dev_network"
+
+  communication:
+    frontend_to_backend:
+      protocol: "HTTP"
+      endpoint_example: "http://localhost:8000/api/v1"
+
+    backend_to_db:
+      protocol: "TCP"
+      service_name: "db"
+      port: 5432
+
+    backend_to_redis:
+      protocol: "TCP"
+      service_name: "redis"
+      port: 6379
+
+    worker_to_camera:
+      protocol:
+        - "HTTP"
+        - "HTTPS"
+      description: "workerコンテナからカメラの静止画取得URLへ接続する"
+
+    worker_to_storage:
+      type: "local_filesystem"
+      path: "/app/storage/images"
+
+  browser_direct_camera_access:
+    allowed: false
+    description: "ブラウザはカメラに直接接続しない"
+
+  camera_access_from_container:
+    required: true
+    description: "開発環境で実カメラへ接続する場合、workerコンテナからカメラURLへ到達可能である必要がある"
+
+
+# ==============================================================================
+# 開発環境ディレクトリ構成
+# ==============================================================================
+development_directory_structure:
+  description: "開発環境の推奨ディレクトリ構成"
+
+  root: "./camera-manager"
+
+  directories:
+    frontend:
+      path: "./frontend"
+      description: "React等のフロントエンドソース"
+
+    backend:
+      path: "./backend"
+      description: "APIサーバー、画像取得処理、DBモデル、管理処理"
+
+    docker:
+      path: "./docker"
+      description: "Dockerfile、nginx設定、開発用設定ファイル"
+
+    storage:
+      path: "./storage"
+      description: "開発環境の永続化データ"
+
+    image_storage:
+      path: "./storage/images"
+      container_path: "/app/storage/images"
+      description: "取得画像、変換後画像、サムネイル画像の保存先"
+
+    logs:
+      path: "./storage/logs"
+      container_path: "/app/storage/logs"
+      description: "アプリケーションログ、画像取得ログ、ワーカーログ"
+
+    db_data:
+      path: "./storage/db"
+      description: "PostgreSQLデータ永続化領域"
+
+  example:
+    tree: |
+      camera-manager/
+        docker-compose.yml
+        .env
+        frontend/
+        backend/
+        docker/
+          nginx/
+          backend/
+          frontend/
+        storage/
+          images/
+            company_000001/
+              site_000001/
+                camera_000001/
+                  2026-06-18/
+                    20260618_143000.jpg
+                    thumb/
+                      20260618_143000_thumb.jpg
+          logs/
+          db/
+
+
+# ==============================================================================
+# 開発環境ボリューム
+# ==============================================================================
+development_volumes:
+  image_storage:
+    host_path: "./storage/images"
+    container_path: "/app/storage/images"
+    purpose: "取得画像、変換画像、サムネイル画像の永続化"
+
+  log_storage:
+    host_path: "./storage/logs"
+    container_path: "/app/storage/logs"
+    purpose: "ログファイルの永続化"
+
+  db_storage:
+    host_path: "./storage/db"
+    container_path: "/var/lib/postgresql/data"
+    purpose: "PostgreSQLデータの永続化"
+
+  source_mount:
+    frontend:
+      host_path: "./frontend"
+      container_path: "/app/frontend"
+      purpose: "フロントエンド開発時のホットリロード"
+
+    backend:
+      host_path: "./backend"
+      container_path: "/app/backend"
+      purpose: "バックエンド開発時のホットリロード"
+
+
+# ==============================================================================
+# 開発環境ポート定義
+# ==============================================================================
+development_ports:
+  frontend:
+    host_port: 3000
+    container_port: 3000
+    protocol: "HTTP"
+    description: "フロントエンド開発サーバー"
+
+  backend:
+    host_port: 8000
+    container_port: 8000
+    protocol: "HTTP"
+    description: "APIサーバー"
+
+  db:
+    host_port: 5432
+    container_port: 5432
+    protocol: "TCP"
+    description: "PostgreSQL"
+
+  redis:
+    host_port: 6379
+    container_port: 6379
+    protocol: "TCP"
+    description: "Redis"
+
+  nginx:
+    host_port: 80
+    container_port: 80
+    protocol: "HTTP"
+    status: "optional"
+    description: "開発用リバースプロキシ"
+
+
+# ==============================================================================
+# 開発環境 環境変数
+# ==============================================================================
+environment_variables:
+  description: "開発環境で使用する主な環境変数"
+
+  common:
+    APP_ENV:
+      value: "development"
+      description: "実行環境"
+
+    APP_TIMEZONE:
+      value: "Asia/Tokyo"
+      description: "アプリケーション表示タイムゾーン"
+
+  backend:
+    DATABASE_URL:
+      example: "postgresql://camera_user:camera_pass@db:5432/camera_db"
+      description: "DB接続URL"
+
+    REDIS_URL:
+      example: "redis://redis:6379/0"
+      description: "Redis接続URL"
+
+    IMAGE_STORAGE_ROOT:
+      example: "/app/storage/images"
+      description: "画像保存ルートディレクトリ"
+
+    LOG_DIR:
+      example: "/app/storage/logs"
+      description: "ログ出力ディレクトリ"
+
+    SECRET_KEY:
+      example: "development-secret-key"
+      description: "開発用アプリケーション秘密鍵。本番では使用不可"
+
+    CAMERA_PASSWORD_ENCRYPTION_KEY:
+      example: "development-camera-password-key"
+      description: "カメラ認証情報暗号化用キー。開発用"
+
+    JWT_SECRET_KEY:
+      example: "development-jwt-secret"
+      description: "JWT認証を採用する場合の開発用秘密鍵"
+
+    IMAGE_PUBLIC_BASE_URL:
+      example: "http://localhost:8000/api/v1/images"
+      description: "画像参照URL生成に使用するベースURL"
+
+  database:
+    POSTGRES_DB:
+      value: "camera_db"
+    POSTGRES_USER:
+      value: "camera_user"
+    POSTGRES_PASSWORD:
+      value: "camera_pass"
+
+  frontend:
+    VITE_API_BASE_URL:
+      example: "http://localhost:8000/api/v1"
+      description: "フロントエンドから参照するAPIベースURL"
+
+
+# ==============================================================================
+# 画像取得処理
+# ==============================================================================
+camera_capture_process:
+  description: >
+    サーバー側の画像取得ワーカーが、登録済みカメラに定期的に接続し、
+    静止画を取得する。取得した画像は保存画質に従ってサーバー側で変換し、
+    ローカルファイルシステムに保存する。
+
+  execution_component: "worker"
+
+  trigger:
+    component: "scheduler"
+    method: "カメラごとの取得間隔に基づきジョブ投入"
+    minimum_interval: "1分"
+
+  target_cameras:
+    condition:
+      - "camera.status == active"
+      - "capture_interval_minutes が設定されている"
+      - "所属企業、所属現場がactive"
+
+  process_flow:
+    - step: 1
+      name: "取得対象カメラ抽出"
+      description: "次回取得時刻に達したactiveカメラを抽出する"
+
+    - step: 2
+      name: "画像取得ジョブ投入"
+      description: "対象カメラごとに画像取得ジョブをRedisキューへ投入する"
+
+    - step: 3
+      name: "カメラ接続"
+      description: "workerがカメラのaddressへBASIC認証でHTTP/HTTPS接続する"
+
+    - step: 4
+      name: "画像データ取得"
+      description: "レスポンスが画像データであることを確認する"
+
+    - step: 5
+      name: "画像変換"
+      description: "設定された保存画質に従い、サーバー側で画像を変換する"
+
+    - step: 6
+      name: "画像ファイル保存"
+      description: "企業・現場・カメラ・日付フォルダに画像ファイルを保存する"
+
+    - step: 7
+      name: "サムネイル生成"
+      description: "サムネイル画像を生成し保存する"
+
+    - step: 8
+      name: "画像メタデータ登録"
+      description: "captured_imageへ画像メタデータを登録する"
+
+    - step: 9
+      name: "最新画像情報更新"
+      description: "camera_latest_imageを更新する"
+
+    - step: 10
+      name: "ログ登録"
+      description: "camera_capture_logへ取得結果を登録する"
+
+  authentication:
+    auth_method: "BASIC認証"
+    credential_source: "DBに保存された暗号化認証情報"
+    decrypt_on_use: true
+    plain_text_log_output: false
+
+  timeout:
+    connection_timeout_seconds: 10
+    read_timeout_seconds: 20
+    status: "仮設定"
+    note: "正式値はカメラ機種、ネットワーク状況により調整"
+
+  retry:
+    status: "未決"
+    recommendation:
+      retry_count: 1
+      retry_interval_seconds: 5
+    candidate_options:
+      - "リトライなし"
+      - "1回リトライ"
+      - "3回リトライ"
+
+  concurrency:
+    status: "開発環境では制限付き"
+    development_default_worker_concurrency: 4
+    note: "100台を1分間隔で取得する本番性能設計は本番環境側で再検討"
+
+  failure_handling:
+    on_connection_failed:
+      - "camera_capture_logに失敗を記録"
+      - "camera.last_capture_statusをfailedに更新"
+      - "camera_latest_image.latest_statusをfailedに更新"
+
+    on_authentication_failed:
+      - "camera_capture_logに認証失敗を記録"
+      - "パスワードはログに出力しない"
+
+    on_image_invalid:
+      - "画像データ不正として失敗記録"
+
+    on_conversion_failed:
+      - "画像変換失敗として失敗記録"
+      - "元画像を保存するかは未決"
+
+    on_storage_failed:
+      - "ファイル保存失敗として失敗記録"
+
+
+# ==============================================================================
+# スケジューラー仕様
+# ==============================================================================
+scheduler:
+  description: "カメラごとの取得間隔に基づいて画像取得ジョブを投入する"
+
+  component: "scheduler"
+  recommendation: "Celery Beat"
+
+  schedule_check_interval:
+    value: "1分"
+    description: "最短取得間隔が1分のため、スケジューラーは1分単位でチェックする"
+
+  target_selection_rule:
+    description: "次回取得時刻に達したカメラを取得対象とする"
+    pseudo_logic: |
+      for camera in active_cameras:
+          if now >= camera.next_capture_at:
+              enqueue_capture_job(camera)
+              camera.next_capture_at = now + camera.capture_interval_minutes
+
+  next_capture_at:
+    storage: "DBまたは計算"
+    status: "未決"
+    candidate_options:
+      - "cameraテーブルにnext_capture_atを保持する"
+      - "last_capture_atとcapture_interval_minutesから計算する"
+    recommendation: "next_capture_atを保持する"
+
+  duplicate_job_prevention:
+    required: true
+    description: "同一カメラに対して同時に複数の取得ジョブが実行されないようにする"
+    method: "RedisロックまたはDBロック"
+    status: "未決"
+
+  scheduler_failure_handling:
+    description: "スケジューラー停止時の扱い"
+    status: "開発環境では手動再起動"
+    production_note: "本番では監視・自動復旧が必要"
+
+
+# ==============================================================================
+# 接続テスト処理
+# ==============================================================================
+camera_connection_test_process:
+  description: >
+    カメラ登録・再設定画面、またはカメラ設定画面から接続テストを実行する。
+    接続テストはサーバー側で実行し、ブラウザからカメラへ直接接続しない。
+
+  execution_component: "backend or worker"
+  recommendation: "backendで同期実行"
+  reason:
+    - "画面操作に対して即時に結果を返す必要がある"
+    - "テスト対象は1台であり、長時間処理ではない"
+
+  process_flow:
+    - step: 1
+      name: "入力値受信"
+      description: "アドレス、認証方式、ID、パスワードを受け取る"
+
+    - step: 2
+      name: "カメラ接続"
+      description: "BASIC認証でカメラURLに接続する"
+
+    - step: 3
+      name: "画像取得確認"
+      description: "レスポンスが画像データであることを確認する"
+
+    - step: 4
+      name: "結果返却"
+      description: "成功・失敗、HTTPステータス、応答時間、エラー内容を返却する"
+
+    - step: 5
+      name: "ログ登録"
+      description: "camera_connection_test_logに結果を保存する"
+
+  preview_image:
+    enabled: "未決"
+    recommendation: true
+    storage:
+      method: "一時保存"
+      directory: "/app/storage/images/_connection_test"
+      retention: "短時間または日次削除"
+    note: "接続テスト成功時にプレビュー表示する場合のみ使用"
+
+  timeout:
+    connection_timeout_seconds: 10
+    read_timeout_seconds: 20
+
+  security:
+    log_password: false
+    return_password_to_client: false
+
+
+# ==============================================================================
+# 画像変換処理
+# ==============================================================================
+image_conversion:
+  description: "カメラから取得した画像を、カメラ設定の保存画質に従ってサーバー側で変換する"
+
+  execution_component: "worker"
+
+  library_candidates:
+    - "Pillow"
+    - "OpenCV"
+  recommendation: "Pillow"
+
+  supported_quality:
+    VGA:
+      width: 640
+      height: 480
+    SVGA:
+      width: 800
+      height: 600
+    WXGA:
+      width: 1280
+      height: 800
+    HD:
+      width: 1280
+      height: 720
+    FullHD:
+      width: 1920
+      height: 1080
+    "4K":
+      width: 3840
+      height: 2160
+
+  resize_rule:
+    preserve_aspect_ratio: true
+    upscale_smaller_image: false
+    fit_mode: "inside"
+    description: "元画像の縦横比を維持し、指定画質の範囲内に収める"
+
+  output_format:
+    default: "JPEG"
+    extension: ".jpg"
+    quality:
+      status: "未決"
+      recommendation: 85
+
+  original_image_handling:
+    keep_original_before_conversion: false
+    status: "推奨"
+    note: "開発環境では変換後画像のみ保存する方針を推奨"
+
+
+# ==============================================================================
+# サムネイル生成処理
+# ==============================================================================
+thumbnail_generation:
+  description: "サムネイル一覧表示用の縮小画像を生成する"
+
+  execution_component: "worker"
+
+  generation_timing:
+    recommendation: "画像取得時"
+    description: "画像取得・変換後にサムネイルも同時生成する"
+
+  storage_method:
+    recommendation: "ファイル保存"
+    description: "サムネイルファイルを保存し、画面表示時の負荷を下げる"
+
+  directory:
+    pattern: "/app/storage/images/{company_code}/{site_code}/{camera_code}/{date}/thumb/"
+
+  file_name:
+    pattern: "{yyyyMMdd}_{HHmmss}_thumb.jpg"
+
+  size:
+    width: 240
+    height: null
+    preserve_aspect_ratio: true
+    note: "高さは縦横比に応じて自動"
+
+  output_format:
+    default: "JPEG"
+    quality:
+      status: "未決"
+      recommendation: 80
+
+
+# ==============================================================================
+# 画像保存処理
+# ==============================================================================
+image_storage_process:
+  description: "画像ファイルを企業・現場・カメラ・日付単位のフォルダに保存する"
+
+  storage_type:
+    development: "local_filesystem"
+    production: "pending"
+
+  development_storage_root:
+    container_path: "/app/storage/images"
+    host_path: "./storage/images"
+
+  folder_pattern:
+    pattern: "{storage_root}/{company_code}/{site_code}/{camera_code}/{date}/"
+    example: "/app/storage/images/company_000001/site_000001/camera_000001/2026-06-18/"
+
+  original_image_path:
+    pattern: "{storage_root}/{company_code}/{site_code}/{camera_code}/{date}/{yyyyMMdd}_{HHmmss}.jpg"
+    example: "/app/storage/images/company_000001/site_000001/camera_000001/2026-06-18/20260618_143000.jpg"
+
+  thumbnail_image_path:
+    pattern: "{storage_root}/{company_code}/{site_code}/{camera_code}/{date}/thumb/{yyyyMMdd}_{HHmmss}_thumb.jpg"
+    example: "/app/storage/images/company_000001/site_000001/camera_000001/2026-06-18/thumb/20260618_143000_thumb.jpg"
+
+  directory_creation:
+    create_if_not_exists: true
+    permissions:
+      directory: "755"
+      file: "644"
+      status: "開発環境の推奨値"
+
+  duplicate_file_handling:
+    status: "未決"
+    recommendation: "ミリ秒を付与"
+    example: "20260618_143000_123.jpg"
+
+  path_security:
+    use_display_name_as_path: false
+    use_code_as_path: true
+    sanitize_path: true
+
+
+# ==============================================================================
+# 画像配信処理
+# ==============================================================================
+image_delivery:
+  description: "画面から画像を参照するための配信方式"
+
+  development:
+    method: "backend_api"
+    description: "開発環境ではAPI経由で認証・権限チェック後に画像を返却する"
+    endpoints:
+      - "GET /api/v1/images/{image_id}/binary?type=original"
+      - "GET /api/v1/images/{image_id}/binary?type=thumbnail"
+
+  alternative_development:
+    method: "nginx_static_with_auth_proxy"
+    status: "optional"
+    description: "nginxで静的配信する場合も、API側で認証付きURLを発行する方針が必要"
+
+  production:
+    method: "pending"
+    expected_candidates:
+      - "S3署名付きURL"
+      - "CloudFront + 署名付きURL"
+      - "API Gateway + Lambda経由"
+    note: "本番環境はペンディング"
+
+  security:
+    public_direct_access: false
+    authorization_check_required: true
+    browser_direct_camera_access: false
+
+
+# ==============================================================================
+# 保存期間超過画像削除処理
+# ==============================================================================
+retention_cleanup_process:
+  description: "カメラごとに設定された保存期間を超過した画像を削除する"
+
+  execution_component: "worker or scheduler"
+  recommendation: "schedulerから日次でcleanupジョブを投入し、workerが削除実行"
+
+  schedule:
+    development_default: "毎日 03:00"
+    timezone: "Asia/Tokyo"
+    status: "仮設定"
+
+  target:
+    - "保存期間を超過した原寸画像"
+    - "保存期間を超過したサムネイル画像"
+    - "保存期間を超過したcaptured_imageメタデータ"
+    - "画像数が0になったimage_available_dateサマリ"
+
+  rule:
+    description: "captured_date が current_date - retention_days より古い画像を削除対象とする"
+    example:
+      current_date: "2026-06-18"
+      retention_days: 30
+      delete_target: "2026-05-18以前"
+
+  delete_order:
+    - "DBから削除対象画像メタデータを取得"
+    - "原寸画像ファイルを削除"
+    - "サムネイル画像ファイルを削除"
+    - "captured_imageメタデータを削除または削除済み更新"
+    - "camera_latest_imageを必要に応じて再計算"
+    - "image_available_dateを再計算または更新"
+    - "削除ログを出力"
+
+  metadata_handling:
+    status: "未決"
+    recommendation: "メタデータも物理削除"
+
+  failure_handling:
+    file_not_found:
+      action: "警告ログを出力し、メタデータ整合性を確認"
+    db_update_failed:
+      action: "エラーログを出力し、次回再実行対象とする"
+    partial_delete:
+      action: "削除途中失敗としてログに記録"
+
+
+# ==============================================================================
+# ログ仕様
+# ==============================================================================
+logging:
+  description: "開発環境におけるログ出力仕様"
+
+  log_directory:
+    container_path: "/app/storage/logs"
+    host_path: "./storage/logs"
+
+  log_files:
+    backend:
+      file: "backend.log"
+      description: "APIサーバーログ"
+
+    worker:
+      file: "worker.log"
+      description: "画像取得ワーカーログ"
+
+    scheduler:
+      file: "scheduler.log"
+      description: "スケジューラーログ"
+
+    capture:
+      file: "capture.log"
+      description: "画像取得処理ログ"
+
+    error:
+      file: "error.log"
+      description: "エラーログ"
+
+  log_level:
+    development_default: "DEBUG"
+    production_default: "INFO"
+    note: "本番環境は未定義だが、DEBUGログは本番で使用しない"
+
+  sensitive_data_masking:
+    enabled: true
+    targets:
+      - "カメラパスワード"
+      - "ログインパスワード"
+      - "認証トークン"
+      - "暗号化キー"
+    rule: "ログには平文で出力しない"
+
+  log_rotation:
+    status: "開発環境では任意"
+    recommendation:
+      enabled: true
+      max_size: "10MB"
+      backup_count: 5
+
+
+# ==============================================================================
+# 開発環境バックアップ
+# ==============================================================================
+development_backup:
+  description: "開発環境のバックアップ方針"
+
+  required_level: "低"
+  reason: "開発環境のため本番レベルのバックアップは不要"
+
+  targets:
+    db:
+      required: "任意"
+      method_candidates:
+        - "pg_dump"
+        - "Docker volume backup"
+
+    image_storage:
+      required: "任意"
+      method_candidates:
+        - "storage/imagesディレクトリのコピー"
+        - "zip圧縮"
+
+    env_file:
+      required: true
+      note: ".envには秘密情報が含まれるため、共有・コミットは禁止"
+
+  git_policy:
+    commit_storage_images: false
+    commit_db_data: false
+    commit_env_file: false
+    commit_example_env: true
+
+
+# ==============================================================================
+# 開発環境監視
+# ==============================================================================
+development_monitoring:
+  description: "開発環境で最低限確認する監視項目"
+
+  health_check:
+    endpoint: "GET /api/v1/health"
+    expected_response: "status ok"
+
+  container_status:
+    check_targets:
+      - "frontend"
+      - "backend"
+      - "db"
+      - "redis"
+      - "worker"
+      - "scheduler"
+
+  manual_check_commands:
+    docker_compose_ps:
+      command: "docker compose ps"
+
+    backend_logs:
+      command: "docker compose logs backend"
+
+    worker_logs:
+      command: "docker compose logs worker"
+
+    scheduler_logs:
+      command: "docker compose logs scheduler"
+
+  image_capture_check:
+    description: "画像取得が正常に動作しているか確認する"
+    check_items:
+      - "capture.logに成功ログが出ていること"
+      - "storage/images配下に画像が保存されていること"
+      - "captured_imageメタデータがDBに登録されていること"
+      - "画面でサムネイルが表示されること"
+
+  disk_usage_check:
+    required: true
+    description: "画像保存量が増えるため、開発環境でもディスク使用量を確認する"
+    command_example: "du -sh ./storage/images"
+
+
+# ==============================================================================
+# 開発環境起動・停止方針
+# ==============================================================================
+development_operation:
+  startup:
+    description: "開発環境の起動"
+    command: "docker compose up -d"
+    steps:
+      - "環境変数ファイル .env を作成する"
+      - "Dockerイメージをビルドする"
+      - "コンテナを起動する"
+      - "DBマイグレーションを実行する"
+      - "初期ユーザー、企業、現場、カメラテストデータを登録する"
+      - "画面からログイン確認する"
+
+  shutdown:
+    description: "開発環境の停止"
+    command: "docker compose down"
+
+  rebuild:
+    description: "イメージ再ビルド"
+    command: "docker compose up -d --build"
+
+  logs:
+    description: "ログ確認"
+    command: "docker compose logs -f"
+
+  migration:
+    description: "DBマイグレーション"
+    command_status: "技術スタック確定後に定義"
+    examples:
+      django:
+        command: "docker compose exec backend python manage.py migrate"
+
+  create_superuser:
+    description: "開発用管理ユーザー作成"
+    command_status: "技術スタック確定後に定義"
+    examples:
+      django:
+        command: "docker compose exec backend python manage.py createsuperuser"
+
+
+# ==============================================================================
+# 開発用テストデータ
+# ==============================================================================
+development_seed_data:
+  description: "開発環境で使用する初期データ"
+
+  users:
+    - role: "system_admin"
+      login_id: "sysadmin"
+      user_name: "システム管理者"
+
+    - role: "company_admin"
+      login_id: "companyadmin"
+      user_name: "企業管理者"
+
+    - role: "site_admin"
+      login_id: "siteadmin"
+      user_name: "現場管理者"
+
+    - role: "general_user"
+      login_id: "user"
+      user_name: "一般ユーザー"
+
+  companies:
+    - company_code: "company_000001"
+      company_name: "開発用企業A"
+
+  sites:
+    - company_code: "company_000001"
+      site_code: "site_000001"
+      site_name: "開発用現場1"
+
+  cameras:
+    - camera_code: "camera_000001"
+      camera_name: "開発用カメラ1"
+      address: "http://example.local/snapshot.jpg"
+      auth_method: "basic"
+      capture_interval_minutes: 1
+      image_quality: "FullHD"
+      retention_days: 30
+
+  note:
+    - "実カメラがない場合は、疑似画像を返すテスト用HTTPサーバーを用意する"
+    - "テストカメラ用ID、パスワードは開発環境専用とする"
+
+
+# ==============================================================================
+# 疑似カメラ・テスト用画像取得先
+# ==============================================================================
+mock_camera:
+  description: "開発環境で実カメラがない場合に使用する疑似カメラ"
+
+  required: "任意"
+
+  implementation_candidates:
+    - "固定JPEGを返す簡易HTTPサーバー"
+    - "時刻入り画像を動的生成して返すテストサーバー"
+    - "nginxで静的JPEGを返す"
+    - "backend内にmock camera endpointを用意する"
+
+  recommendation:
+    method: "固定JPEGまたは時刻入りJPEGを返す簡易HTTPサーバー"
+    reason:
+      - "実カメラなしで画像取得、保存、サムネイル、最新画像表示を確認できる"
+      - "100台相当の取得負荷試験にも使いやすい"
+
+  basic_auth:
+    enabled: true
+    description: "BASIC認証のテストができるようにする"
+
+  mock_endpoint_example:
+    url: "http://mock-camera:8080/snapshot.jpg"
+
+
+# ==============================================================================
+# 本番環境ペンディング
+# ==============================================================================
+production_environment:
+  status: "pending"
+  description: >
+    本番環境はAWS Lambda、Amazon S3を利用する想定だが、
+    Ver0.8では具体的な定義を行わない。
+    後続バージョンでAWS前提の構成として再定義する。
+
+  expected_direction:
+    platform:
+      - "AWS Lambda"
+      - "Amazon S3"
+
+    likely_components:
+      - "API Gateway"
+      - "AWS Lambda API"
+      - "AWS Lambda Image Capture"
+      - "AWS Lambda Image Conversion"
+      - "Amazon S3 Image Storage"
+      - "Amazon RDS または DynamoDB"
+      - "Amazon EventBridge Scheduler"
+      - "Amazon CloudWatch Logs"
+      - "AWS Secrets Manager または KMS"
+      - "Amazon CloudFront"
+
+  pending_design_items:
+    - "Lambda関数分割"
+    - "画像取得処理をLambdaで実行する場合のタイムアウト制限"
+    - "100台カメラを1分間隔で取得する場合のEventBridge/Lambda設計"
+    - "S3バケット構成"
+    - "S3オブジェクトキー設計"
+    - "画像配信方式"
+    - "署名付きURL利用可否"
+    - "CloudFront利用可否"
+    - "カメラ認証情報のSecrets Manager/KMS管理"
+    - "DB選定"
+    - "CloudWatch監視"
+    - "アラーム通知"
+    - "コスト見積"
+    - "VPC内Lambda要否"
+    - "カメラがインターネット公開されていない場合の接続方式"
+
+  note:
+    - "本番環境は開発環境のローカルファイル保存とは異なり、S3保存前提で再設計する"
+    - "Lambdaは実行時間、同時実行数、ネットワーク到達性を考慮する必要がある"
+    - "本番設計では100台・最短1分間隔の取得負荷を必ず再評価する"
+
+
+# ==============================================================================
+# セキュリティ方針 開発環境
+# ==============================================================================
+development_security:
+  description: "開発環境における最低限のセキュリティ方針"
+
+  authentication:
+    enabled: true
+    note: "開発環境でもログイン認証を有効にする"
+
+  authorization:
+    enabled: true
+    note: "権限別画面・API制御を開発環境でも確認する"
+
+  camera_credentials:
+    encrypt_password: true
+    plain_text_storage: false
+    plain_text_log_output: false
+
+  env_file:
+    commit_to_git: false
+    use_example_env: true
+
+  image_access:
+    public_access: false
+    note: "画像ファイルはAPI経由で権限チェックして返却する方針"
+
+  cors:
+    enabled: true
+    allowed_origins:
+      - "http://localhost:3000"
+    note: "開発環境用。nginxで同一オリジン化する場合は不要"
+
+
+# ==============================================================================
+# パフォーマンス方針 開発環境
+# ==============================================================================
+development_performance:
+  description: "開発環境での性能確認方針"
+
+  target:
+    normal_development:
+      camera_count: "1〜10台"
+      capture_interval: "1分以上"
+
+    stress_test:
+      camera_count: "100台相当"
+      method: "疑似カメラまたは固定画像URLを使用"
+      capture_interval: "1分"
+
+  check_items:
+    - "画像取得ジョブが詰まらないこと"
+    - "workerの同時実行数を調整できること"
+    - "画像変換処理が許容時間内に終わること"
+    - "サムネイル生成が画面表示に影響しないこと"
+    - "サムネイル一覧表示が遅くなりすぎないこと"
+    - "複数カメラ最新画像まとめ表示が更新できること"
+
+  known_limitations:
+    - "開発環境のローカルPC性能に依存する"
+    - "実カメラの応答速度に依存する"
+    - "Docker DesktopやWSLのファイルI/O性能に依存する"
+
+
+# ==============================================================================
+# 障害時動作 開発環境
+# ==============================================================================
+development_failure_behavior:
+  db_down:
+    behavior:
+      - "APIはDB接続エラーを返す"
+      - "画像取得ジョブは失敗する"
+      - "ログにDB接続エラーを記録する"
+
+  redis_down:
+    behavior:
+      - "画像取得ジョブ投入不可"
+      - "worker処理不可"
+      - "scheduler処理不可"
+      - "APIのカメラ管理などDBのみの機能は動作可能な場合がある"
+
+  worker_down:
+    behavior:
+      - "画像定期取得が停止する"
+      - "画面表示、カメラ設定APIは動作可能"
+      - "既存画像の参照は可能"
+
+  scheduler_down:
+    behavior:
+      - "新規画像取得ジョブが投入されない"
+      - "手動接続テストは動作可能"
+
+  image_storage_unavailable:
+    behavior:
+      - "画像保存に失敗する"
+      - "画像取得ログにstorage errorを記録する"
+      - "画像参照APIで画像読み込みエラーになる"
+
+  camera_unreachable:
+    behavior:
+      - "camera_capture_logに取得失敗を記録する"
+      - "camera.last_capture_statusをfailedに更新する"
+      - "複数カメラ最新画像画面に取得失敗を表示する"
+
+
+# ==============================================================================
+# Ver0.8時点の確定事項
+# ==============================================================================
+confirmed_items:
+  - "Ver0.8では開発環境のみ定義する"
+  - "本番環境はAWS Lambda、S3想定だがペンディングとする"
+  - "開発環境はDocker Compose構成を前提とする"
+  - "開発環境では画像をローカルファイルシステムに保存する"
+  - "画像保存先は /app/storage/images とする"
+  - "ホスト側では ./storage/images にマウントする"
+  - "DBはPostgreSQLを推奨する"
+  - "Redisをジョブキューとして使用する"
+  - "画像取得ワーカーを用意する"
+  - "スケジューラーを用意する"
+  - "スケジューラーは最短1分間隔の画像取得に対応する"
+  - "画像取得はサーバー側で実行する"
+  - "ブラウザからカメラへ直接接続しない"
+  - "カメラ認証方式はBASIC認証とする"
+  - "カメラパスワードは平文ログ出力しない"
+  - "保存画質変換はサーバー側で行う"
+  - "サムネイルは画像取得時に生成することを推奨する"
+  - "保存期間超過画像削除処理を用意する"
+  - "通常サムネイル、原寸画像、複数カメラ最新画像はサーバー保存済み画像を参照する"
+  - "開発環境でも権限チェックを有効にする"
+
+
+# ==============================================================================
+# 未決事項
+# ==============================================================================
+pending_items:
+  - id: "I001"
+    title: "本番環境設計"
+    description: "AWS Lambda、S3を使う想定だが、詳細構成は未決"
+    candidate_options:
+      - "API Gateway + Lambda + S3"
+      - "ECS/Fargate + S3"
+      - "EC2 + S3"
+      - "Lambda + EventBridge + S3 + RDS"
+    recommendation: "後続バージョンでAWS前提として詳細化"
+
+  - id: "I002"
+    title: "本番DB"
+    description: "本番環境で使用するDBが未決"
+    candidate_options:
+      - "Amazon RDS PostgreSQL"
+      - "Amazon Aurora PostgreSQL"
+      - "DynamoDB"
+      - "その他"
+
+  - id: "I003"
+    title: "本番画像保存"
+    description: "本番環境の画像保存方式が未決"
+    candidate_options:
+      - "Amazon S3"
+      - "S3 + CloudFront"
+    recommendation: "Amazon S3"
+
+  - id: "I004"
+    title: "本番スケジューラー"
+    description: "本番環境で画像取得スケジュールをどのように実行するか未決"
+    candidate_options:
+      - "EventBridge Scheduler"
+      - "EventBridge Rule"
+      - "Step Functions"
+      - "ECS Scheduled Task"
+
+  - id: "I005"
+    title: "Lambdaによる100台・1分間隔取得の実現方式"
+    description: "100台程度のカメラを最短1分間隔で取得する場合のLambda分散実行方式が未決"
+    candidate_options:
+      - "1分ごとに一括起動して対象カメラを並列処理"
+      - "カメラ単位でLambdaを分散起動"
+      - "SQSにジョブ投入してLambdaで処理"
+      - "ECS/Fargateワーカーを使用"
+
+  - id: "I006"
+    title: "開発環境のバックエンド技術"
+    description: "Django REST FrameworkまたはFastAPIなど、APIサーバーの技術スタックが未確定"
+    candidate_options:
+      - "Django REST Framework"
+      - "FastAPI"
+    recommendation: "Django REST Framework"
+
+  - id: "I007"
+    title: "開発環境のフロントエンド技術"
+    description: "React/TypeScript想定だが正式確定は未決"
+    candidate_options:
+      - "React + TypeScript"
+      - "その他"
+    recommendation: "React + TypeScript"
+
+  - id: "I008"
+    title: "画像取得リトライ回数"
+    description: "カメラ接続失敗時のリトライ回数が未決"
+    candidate_options:
+      - "リトライなし"
+      - "1回"
+      - "3回"
+    recommendation: "1回"
+
+  - id: "I009"
+    title: "スケジューラーのnext_capture_at管理方式"
+    description: "次回取得時刻をDBに保持するか計算で求めるか未決"
+    candidate_options:
+      - "DBに保持"
+      - "last_capture_atから計算"
+    recommendation: "DBに保持"
+
+  - id: "I010"
+    title: "同一カメラの重複ジョブ防止方式"
+    description: "同じカメラの取得ジョブが同時実行されないようにする方式が未決"
+    candidate_options:
+      - "Redisロック"
+      - "DBロック"
+      - "ジョブキュー側制御"
+    recommendation: "Redisロック"
+
+  - id: "I011"
+    title: "画像配信方式"
+    description: "開発環境ではAPI経由を想定するが、本番ではS3署名付きURL等を検討する必要がある"
+    candidate_options:
+      - "APIバイナリ返却"
+      - "認証付き静的配信"
+      - "S3署名付きURL"
+      - "CloudFront署名付きURL"
+
+  - id: "I012"
+    title: "監査ログの正式採用"
+    description: "設定変更や画像閲覧の監査ログを正式に必須とするか未決"
+    candidate_options:
+      - "設定変更のみ記録"
+      - "画像閲覧も記録"
+      - "記録しない"
+    recommendation: "設定変更のみ記録"
+
+  - id: "I013"
+    title: "開発環境でnginxを使うか"
+    description: "開発環境でnginxを必須にするか任意にするか未決"
+    candidate_options:
+      - "必須"
+      - "任意"
+    recommendation: "任意"
+
+  - id: "I014"
+    title: "疑似カメラサービス"
+    description: "実カメラなしで開発するためのmock-cameraサービスをdocker-composeに含めるか未決"
+    candidate_options:
+      - "含める"
+      - "含めない"
+    recommendation: "含める"
+
+  - id: "I015"
+    title: "サムネイルサイズ"
+    description: "開発環境で生成するサムネイルサイズが未確定"
+    candidate_options:
+      - "幅200px"
+      - "幅240px"
+      - "幅320px"
+    recommendation: "幅240px"
+

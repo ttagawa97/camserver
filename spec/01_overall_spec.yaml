@@ -1,0 +1,820 @@
+# ==============================================================================
+# 01_overall_spec.yaml
+# ==============================================================================
+# システム名:
+#   インターネットカメラ静止画管理システム
+#
+# 目的:
+#   複数台のインターネットカメラからサーバーが定期的に静止画を取得し、
+#   企業・現場・カメラ・日付単位で保存、閲覧、管理できるシステムを構築する。
+#
+# 本ファイルの位置づけ:
+#   本ファイルは、システム全体の概要・権限・主要機能・画面遷移・運用方針を定義する。
+#   詳細なデータ構造、UI、API、インフラ仕様は別ファイルに分割して定義する。
+#
+# 分割ファイル構成:
+#   - 01_overall_spec.yaml : 全体仕様
+#   - 02_data_spec.yaml    : データ仕様・フォルダ構成・画像保存仕様
+#   - 03_ui_spec.yaml      : UI仕様・画面遷移・画面項目
+#   - 04_api_spec.yaml     : API仕様
+#   - 05_infra_spec.yaml   : インフラ仕様・バッチ・運用構成
+#
+# バージョン:
+#   Ver0.8
+#
+# 注意:
+#   本仕様は現時点の会話内容をもとにした初期整理版であり、
+#   未決事項は pending_items に明示する。
+# ==============================================================================
+
+
+# ==============================================================================
+# 修正履歴
+# ==============================================================================
+revision_history:
+  - version: "0.8"
+    date: "2026-06-18"
+    author: "ChatGPT"
+    changes:
+      - "初版作成"
+      - "複数台インターネットカメラの静止画取得・保存・閲覧仕様を整理"
+      - "ユーザー権限として、システム管理者、企業管理者、現場管理者、一般ユーザーを定義"
+      - "権限別のログイン後初期画面と画面遷移を整理"
+      - "カメラ登録、再設定、削除、接続テスト仕様を追加"
+      - "複数カメラ最新画像まとめ表示機能を追加"
+      - "画像保存は企業・現場・カメラ・日付単位のフォルダ階層とする方針を定義"
+      - "保存画質はサーバー側変換とする方針を定義"
+
+
+# ==============================================================================
+# システム基本情報
+# ==============================================================================
+system:
+  name: "インターネットカメラ静止画管理システム"
+  version: "0.8"
+  description: >
+    複数台のインターネットカメラから、サーバーが定期的に静止画を取得し、
+    取得した画像を企業・現場・カメラ・日付ごとのフォルダに保存する。
+    ユーザーは権限に応じて企業、現場、カメラを選択し、
+    静止画サムネイル一覧、原寸画像、複数カメラの最新画像を参照できる。
+
+  target_scale:
+    camera_count: "約100台程度"
+    minimum_capture_interval: "1分"
+    capture_interval_setting: "任意の間隔を設定可能"
+
+  system_type:
+    category: "Webアプリケーション"
+    capture_method: "サーバー主導による定期取得"
+    image_storage_method: "サーバー上のファイルシステムに保存"
+    image_database_storage: false
+
+  primary_objective:
+    - "複数企業・複数現場・複数カメラを管理する"
+    - "カメラから定期的に静止画を取得する"
+    - "取得画像を日付単位で管理する"
+    - "画像が存在する日付のみをカレンダーから選択可能にする"
+    - "サムネイル一覧から原寸画像を確認できるようにする"
+    - "複数カメラの最新画像をまとめて監視できるようにする"
+
+
+# ==============================================================================
+# 用語定義
+# ==============================================================================
+terms:
+  company:
+    name: "企業"
+    description: "システム上で管理対象となる会社、組織、契約単位"
+
+  site:
+    name: "現場"
+    description: "企業配下に存在するカメラ設置場所、拠点、施設、現場単位"
+
+  camera:
+    name: "カメラ"
+    description: "静止画取得対象となるインターネットカメラ"
+
+  captured_image:
+    name: "取得画像"
+    description: "サーバーがカメラに接続して取得した静止画"
+
+  thumbnail:
+    name: "サムネイル"
+    description: "一覧表示用に縮小表示される画像"
+
+  original_image:
+    name: "原寸画像"
+    description: "保存画質に従ってサーバーに保存された実画像"
+
+  latest_image:
+    name: "最新画像"
+    description: "対象カメラにおいて、最も新しく取得された画像"
+
+  capture_interval:
+    name: "取得間隔"
+    description: "サーバーが対象カメラから静止画を取得する間隔"
+
+  retention_period:
+    name: "保存期間"
+    description: "取得画像をサーバー上に保持する期間"
+
+
+# ==============================================================================
+# ユーザー種別・権限概要
+# ==============================================================================
+users:
+  roles:
+    system_admin:
+      name: "システム管理者"
+      description: "全企業、全現場、全カメラを管理できる最上位ユーザー"
+      scope:
+        companies: "全企業"
+        sites: "全現場"
+        cameras: "全カメラ"
+      login_after_screen: "企業選択画面"
+      permissions:
+        view_images: true
+        view_latest_multi_camera: true
+        manage_companies: true
+        manage_sites: true
+        manage_cameras: true
+        add_camera: true
+        edit_camera: true
+        delete_camera: true
+        connection_test: true
+
+    company_admin:
+      name: "企業管理者"
+      description: "自社企業配下の現場、カメラを管理できるユーザー"
+      scope:
+        companies: "所属企業のみ"
+        sites: "所属企業配下の現場"
+        cameras: "所属企業配下のカメラ"
+      login_after_screen: "現場選択画面"
+      permissions:
+        view_images: true
+        view_latest_multi_camera: true
+        manage_companies: false
+        manage_sites: true
+        manage_cameras: true
+        add_camera: true
+        edit_camera: true
+        delete_camera: true
+        connection_test: true
+
+    site_admin:
+      name: "現場管理者"
+      description: "自分が所属する現場のカメラを管理できるユーザー"
+      scope:
+        companies: "所属企業のみ"
+        sites: "所属現場のみ"
+        cameras: "所属現場のカメラ"
+      login_after_screen: "カメラリスト・静止画サムネイル画面"
+      permissions:
+        view_images: true
+        view_latest_multi_camera: true
+        manage_companies: false
+        manage_sites: false
+        manage_cameras: true
+        add_camera: true
+        edit_camera: true
+        delete_camera: true
+        connection_test: true
+
+    general_user:
+      name: "一般ユーザー"
+      description: "自分が所属する現場の画像を閲覧できるユーザー"
+      scope:
+        companies: "所属企業のみ"
+        sites: "所属現場のみ"
+        cameras: "所属現場のカメラ"
+      login_after_screen: "カメラリスト・静止画サムネイル画面"
+      permissions:
+        view_images: true
+        view_latest_multi_camera: true
+        manage_companies: false
+        manage_sites: false
+        manage_cameras: false
+        add_camera: false
+        edit_camera: false
+        delete_camera: false
+        connection_test: false
+
+
+# ==============================================================================
+# 権限別画面遷移
+# ==============================================================================
+screen_transition:
+  system_admin:
+    description: "システム管理者は、ログイン後に企業を選択し、その後に現場を選択する"
+    flow:
+      - "ログイン画面"
+      - "企業選択画面"
+      - "現場選択画面"
+      - "カメラリスト・静止画サムネイル画面"
+
+  company_admin:
+    description: "企業管理者は、所属企業が固定されるため、ログイン後に現場を選択する"
+    flow:
+      - "ログイン画面"
+      - "現場選択画面"
+      - "カメラリスト・静止画サムネイル画面"
+
+  site_admin:
+    description: "現場管理者は、所属現場が固定されるため、ログイン後にカメラリスト・静止画サムネイル画面を表示する"
+    flow:
+      - "ログイン画面"
+      - "カメラリスト・静止画サムネイル画面"
+
+  general_user:
+    description: "一般ユーザーは、所属現場が固定されるため、ログイン後にカメラリスト・静止画サムネイル画面を表示する"
+    flow:
+      - "ログイン画面"
+      - "カメラリスト・静止画サムネイル画面"
+
+
+# ==============================================================================
+# 主要機能一覧
+# ==============================================================================
+features:
+  authentication:
+    name: "ログイン機能"
+    description: "ユーザーはログイン後、権限に応じた初期画面に遷移する"
+    target_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+      - "general_user"
+
+  company_selection:
+    name: "企業選択機能"
+    description: "システム管理者が参照・管理対象の企業を選択する"
+    target_roles:
+      - "system_admin"
+
+  site_selection:
+    name: "現場選択機能"
+    description: "システム管理者、企業管理者が参照・管理対象の現場を選択する"
+    target_roles:
+      - "system_admin"
+      - "company_admin"
+
+  camera_list:
+    name: "カメラリスト表示機能"
+    description: "選択中の現場に登録されているカメラを左側メニューに表示する"
+    target_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+      - "general_user"
+
+  image_thumbnail_view:
+    name: "静止画サムネイル一覧表示機能"
+    description: "選択中の日付に存在する静止画をサムネイル形式で一覧表示する"
+    target_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+      - "general_user"
+
+  original_image_view:
+    name: "原寸画像表示機能"
+    description: "サムネイルをダブルクリックすると原寸画像を表示する"
+    target_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+      - "general_user"
+
+  image_date_selection:
+    name: "画像日付選択機能"
+    description: "画像が存在する日付のみカレンダーから選択可能とする"
+    target_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+      - "general_user"
+    default_behavior:
+      default_selected_date: "最新画像が存在する日付"
+      disabled_date_rule: "画像が存在しない日は選択不可"
+
+  camera_capture:
+    name: "静止画定期取得機能"
+    description: "サーバーが登録カメラに定期接続し、静止画を取得する"
+    target_roles:
+      - "system"
+    capture_rule:
+      minimum_interval: "1分"
+      interval_setting: "カメラごとに設定可能"
+      connection_direction: "サーバーからカメラへ接続"
+
+  camera_management:
+    name: "カメラ管理機能"
+    description: "権限を持つユーザーがカメラの追加、再設定、削除、接続テストを実行する"
+    target_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+    operations:
+      add_camera: true
+      edit_camera: true
+      delete_camera: true
+      connection_test: true
+
+  multi_camera_latest_view:
+    name: "複数カメラ最新画像まとめ表示機能"
+    description: "左側カメラメニューで複数カメラを選択し、各カメラの最新画像をまとめて表示する"
+    target_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+      - "general_user"
+    behavior:
+      select_method: "左側カメラメニューのチェックボックスで対象カメラを選択"
+      transition_trigger: "まとめて参照ボタン押下"
+      display_target: "選択された複数カメラの最新画像"
+      refresh_behavior: "画面表示中は最新画像を常に表示する"
+      refresh_source: "サーバーに保存済みの最新画像"
+
+
+# ==============================================================================
+# カメラ管理仕様概要
+# ==============================================================================
+camera_management:
+  entry_point:
+    screen: "カメラリスト・静止画サムネイル画面"
+    menu: "設定メニュー"
+    description: "サムネイル画面に設定メニューを用意し、設定メニューからカメラ設定画面を開く"
+
+  camera_setting_screen:
+    description: "設定画面では登録済みカメラリストを表示し、各カメラの再設定、削除、接続テストを可能とする"
+    displayed_items:
+      - "カメラ名"
+      - "アドレス"
+      - "認証方式"
+      - "取得間隔"
+      - "保存画質"
+      - "保存期間"
+      - "操作ボタン"
+
+    operations:
+      add:
+        enabled: true
+        description: "新規カメラを追加する"
+
+      edit:
+        enabled: true
+        description: "既存カメラの設定を変更する"
+
+      delete:
+        enabled: true
+        description: "既存カメラを削除する"
+
+      connection_test:
+        enabled: true
+        description: "入力された接続情報を使ってカメラから静止画を取得できるか確認する"
+
+  camera_form:
+    description: "カメラ登録画面とカメラ再設定画面は共通フォームとする"
+    common_for:
+      - "新規登録"
+      - "再設定"
+
+    fields:
+      camera_name:
+        label: "カメラ名"
+        required: true
+        description: "画面上に表示するカメラ名称"
+
+      address:
+        label: "アドレス"
+        required: true
+        description: "静止画取得先となるカメラのURLまたは接続先アドレス"
+
+      auth_method:
+        label: "認証方式"
+        required: true
+        allowed_values:
+          - "BASIC認証"
+        default: "BASIC認証"
+        description: "カメラ接続時の認証方式。Ver0.8ではBASIC認証のみ対象"
+
+      login_id:
+        label: "ID"
+        required: true
+        description: "カメラ接続用ID"
+
+      password:
+        label: "パスワード"
+        required: true
+        description: "カメラ接続用パスワード。再設定時は入力値で上書きする"
+
+      capture_interval:
+        label: "取得間隔"
+        required: true
+        minimum: "1分"
+        description: "サーバーがカメラから静止画を取得する間隔"
+
+      image_quality:
+        label: "保存画質"
+        required: true
+        conversion_method: "サーバー側変換"
+        allowed_values:
+          - "VGA"
+          - "SVGA"
+          - "WXGA"
+          - "HD"
+          - "FullHD"
+          - "4K"
+        description: "カメラから取得した画像を、サーバー側で指定画質に変換して保存する"
+
+      retention_period:
+        label: "保存期間"
+        required: true
+        description: "取得画像を保存する期間"
+
+  password_update_rule:
+    description: "パスワード変更は上書き方式とする"
+    update_method: "入力されたパスワードで既存パスワードを上書き"
+
+  image_quality_rule:
+    description: "保存画質はカメラ側指定ではなく、サーバー側で変換する"
+    conversion_timing: "画像取得後、保存前"
+    original_camera_image_handling: "未決"
+    converted_image_storage: true
+
+  delete_rule:
+    description: "カメラ削除を可能とする"
+    delete_method: "未決"
+    image_delete_on_camera_delete: "未決"
+
+  connection_test_rule:
+    description: "カメラ登録・再設定時に接続テストを実行可能とする"
+    test_method: "入力中のアドレス、認証方式、ID、パスワードを使って静止画取得を試行する"
+    success_condition:
+      - "カメラへ接続できる"
+      - "画像データを取得できる"
+    failure_condition:
+      - "接続できない"
+      - "認証に失敗する"
+      - "画像データを取得できない"
+      - "タイムアウトする"
+
+
+# ==============================================================================
+# 画像取得・保存仕様概要
+# ==============================================================================
+image_capture_and_storage:
+  capture:
+    description: "サーバーが各カメラに定期的に接続し、静止画を取得する"
+    direction: "server_to_camera"
+    minimum_interval: "1分"
+    interval_unit: "分"
+    per_camera_setting: true
+
+  storage:
+    description: "画像はサーバーの特定フォルダに保存する"
+    database_storage: false
+    folder_hierarchy:
+      - "企業"
+      - "現場"
+      - "カメラ"
+      - "日付"
+    example_path: "/image_storage/{company}/{site}/{camera}/{date}/"
+
+  image_quality:
+    description: "取得画像はサーバー側で指定画質に変換して保存する"
+    conversion_by_server: true
+    supported_quality:
+      - "VGA"
+      - "SVGA"
+      - "WXGA"
+      - "HD"
+      - "FullHD"
+      - "4K"
+
+  retention:
+    description: "カメラごとに保存期間を設定する"
+    per_camera_setting: true
+    delete_expired_images: true
+    delete_process_detail: "05_infra_spec.yaml で定義予定"
+
+  thumbnail:
+    description: "サムネイル一覧表示に使用する縮小画像"
+    generation_timing: "未決"
+    storage_method: "未決"
+
+
+# ==============================================================================
+# 画像閲覧仕様概要
+# ==============================================================================
+image_viewing:
+  thumbnail_screen:
+    name: "カメラリスト・静止画サムネイル画面"
+    layout:
+      left_area: "登録済みカメラリスト"
+      right_area: "静止画サムネイル一覧"
+    default_date:
+      description: "画像が存在する最新日付をデフォルト表示する"
+      value: "latest_available_date"
+
+    date_selection:
+      method: "カレンダー"
+      selectable_dates: "画像が存在する日付のみ"
+      disabled_dates: "画像が存在しない日付"
+
+    original_image:
+      open_trigger: "サムネイルをダブルクリック"
+      display_method: "原寸画像表示"
+
+  multi_camera_latest_screen:
+    name: "複数カメラ最新画像まとめ表示画面"
+    description: "複数カメラの最新画像を同時に確認する画面"
+    entry_point:
+      from_screen: "カメラリスト・静止画サムネイル画面"
+      operation:
+        - "左側カメラメニューでチェックボックスを選択"
+        - "まとめて参照ボタンを押下"
+
+    display:
+      target_images: "選択された各カメラの最新画像"
+      display_items:
+        - "カメラ名"
+        - "最新画像"
+        - "取得日時"
+        - "取得状態"
+
+    refresh:
+      description: "画面表示中は最新画像を常に表示する"
+      method: "サーバーに保存済みの最新画像を定期的に再取得して表示更新"
+      interval: "未決"
+
+
+# ==============================================================================
+# システム全体ルール
+# ==============================================================================
+system_rules:
+  access_control:
+    description: "ユーザーは自分の権限範囲内の企業、現場、カメラ、画像のみ参照・管理できる"
+    enforce_role_scope: true
+
+  camera_capture:
+    description: "画像取得はブラウザではなくサーバー側で実施する"
+    browser_direct_camera_access: false
+    server_side_capture: true
+
+  image_view:
+    description: "画面表示ではサーバーに保存済みの画像を参照する"
+    source: "server_storage"
+
+  image_calendar:
+    description: "画像が存在しない日付はカレンダー上で選択不可とする"
+    disable_dates_without_images: true
+
+  camera_management:
+    description: "カメラ管理は一般ユーザーには許可しない"
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+    denied_roles:
+      - "general_user"
+
+  multi_camera_view:
+    description: "複数カメラ最新画像まとめ表示は閲覧機能のため一般ユーザーも利用可能とする"
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+      - "general_user"
+
+
+# ==============================================================================
+# 非機能・運用方針概要
+# ==============================================================================
+non_functional_overview:
+  scalability:
+    target_camera_count: "約100台程度"
+    note: "将来的な拡張余地は05_infra_spec.yamlで検討する"
+
+  performance:
+    minimum_capture_interval: "1分"
+    note: "100台規模で1分間隔取得する場合の同時接続数、取得処理分散、タイムアウト制御は05_infra_spec.yamlで定義する"
+
+  storage:
+    storage_type: "サーバーファイルシステム"
+    note: "保存容量見積、保存期間超過画像の削除方式は02_data_spec.yamlおよび05_infra_spec.yamlで定義する"
+
+  security:
+    camera_authentication: "BASIC認証"
+    password_storage: "未決"
+    access_control: "ロールベース制御"
+    note: "カメラ認証情報の暗号化保存方式は02_data_spec.yamlまたは05_infra_spec.yamlで定義する"
+
+  availability:
+    requirement_level: "未決"
+    note: "冗長化、バックアップ、障害時動作は05_infra_spec.yamlで定義する"
+
+  audit:
+    requirement_level: "未決"
+    note: "カメラ設定変更、削除、接続テスト結果の監査ログ要否は未決"
+
+
+# ==============================================================================
+# 他ファイルへの分割予定
+# ==============================================================================
+related_specs:
+  data_spec:
+    file: "02_data_spec.yaml"
+    planned_contents:
+      - "企業データ構造"
+      - "現場データ構造"
+      - "カメラデータ構造"
+      - "ユーザーデータ構造"
+      - "画像メタデータ"
+      - "画像フォルダ構成"
+      - "ファイル命名規則"
+      - "保存期間管理"
+      - "サムネイル保存方式"
+      - "認証情報保存方式"
+
+  ui_spec:
+    file: "03_ui_spec.yaml"
+    planned_contents:
+      - "ログイン画面"
+      - "企業選択画面"
+      - "現場選択画面"
+      - "カメラリスト・静止画サムネイル画面"
+      - "原寸画像表示画面"
+      - "カメラ設定画面"
+      - "カメラ登録・再設定共通画面"
+      - "複数カメラ最新画像まとめ表示画面"
+      - "権限別メニュー表示制御"
+      - "カレンダー制御"
+
+  api_spec:
+    file: "04_api_spec.yaml"
+    planned_contents:
+      - "ログインAPI"
+      - "企業一覧取得API"
+      - "現場一覧取得API"
+      - "カメラ一覧取得API"
+      - "カメラ登録API"
+      - "カメラ更新API"
+      - "カメラ削除API"
+      - "カメラ接続テストAPI"
+      - "画像日付一覧取得API"
+      - "サムネイル一覧取得API"
+      - "原寸画像取得API"
+      - "複数カメラ最新画像取得API"
+
+  infra_spec:
+    file: "05_infra_spec.yaml"
+    planned_contents:
+      - "Webサーバー構成"
+      - "アプリケーションサーバー構成"
+      - "画像取得バッチ構成"
+      - "スケジューラー構成"
+      - "画像変換処理"
+      - "保存期間超過画像削除処理"
+      - "ログ管理"
+      - "バックアップ"
+      - "監視"
+      - "障害時動作"
+
+
+# ==============================================================================
+# 未決事項
+# ==============================================================================
+pending_items:
+  - id: "P001"
+    title: "カメラ削除時の画像扱い"
+    description: "カメラ削除時に保存済み画像も削除するか、設定のみ論理削除して画像は残すか未決"
+    candidate_options:
+      - "カメラ設定のみ論理削除し、画像は残す"
+      - "カメラ設定と保存済み画像を物理削除する"
+      - "削除時にユーザーが選択する"
+
+  - id: "P002"
+    title: "カメラ削除方式"
+    description: "物理削除か論理削除か未決"
+    candidate_options:
+      - "論理削除"
+      - "物理削除"
+
+  - id: "P003"
+    title: "サムネイル生成タイミング"
+    description: "画像取得時にサムネイルを生成するか、画面表示時に生成するか未決"
+    candidate_options:
+      - "画像取得時に生成"
+      - "初回表示時に生成"
+      - "都度動的生成"
+
+  - id: "P004"
+    title: "サムネイル保存方式"
+    description: "サムネイル画像をファイル保存するか、都度生成するか未決"
+    candidate_options:
+      - "サムネイルファイルを保存する"
+      - "原寸画像から都度生成する"
+
+  - id: "P005"
+    title: "複数カメラ最新画像画面の更新間隔"
+    description: "最新画像の再取得間隔が未決"
+    candidate_options:
+      - "30秒"
+      - "60秒"
+      - "カメラ取得間隔に合わせる"
+      - "ユーザー設定可能"
+
+  - id: "P006"
+    title: "カメラ認証情報の保存方式"
+    description: "BASIC認証用ID、パスワードの暗号化方式が未決"
+    candidate_options:
+      - "DBに暗号化保存"
+      - "環境依存の秘密鍵で暗号化"
+      - "外部シークレット管理サービスを利用"
+
+  - id: "P007"
+    title: "保存画質の正確なサイズ定義"
+    description: "VGA、SVGA、WXGA、HD、FullHD、4Kの具体的なピクセルサイズを正式定義する必要がある"
+    candidate_options:
+      - "02_data_spec.yamlで定義"
+      - "03_ui_spec.yamlで表示名のみ定義し、変換仕様は05_infra_spec.yamlで定義"
+
+  - id: "P008"
+    title: "取得失敗時の扱い"
+    description: "カメラ接続失敗、認証失敗、タイムアウト時のリトライ回数、ログ、画面表示ルールが未決"
+    candidate_options:
+      - "即時失敗扱い"
+      - "一定回数リトライ後に失敗扱い"
+      - "連続失敗回数により通信異常扱い"
+
+  - id: "P009"
+    title: "企業・現場管理機能の詳細"
+    description: "企業追加、現場追加、編集、削除の詳細権限と画面仕様が未決"
+    candidate_options:
+      - "システム管理者のみ企業管理可能"
+      - "企業管理者は自社配下の現場管理可能"
+      - "現場管理者は現場情報の参照のみ"
+
+  - id: "P010"
+    title: "監査ログ要否"
+    description: "カメラ登録、再設定、削除、接続テスト、画像閲覧に対する監査ログ要否が未決"
+    candidate_options:
+      - "設定変更系のみ監査ログ対象"
+      - "閲覧も含めて監査ログ対象"
+      - "監査ログなし"
+
+  - id: "P011"
+    title: "画像ダウンロード可否"
+    description: "原寸画像のダウンロードを許可するか未決"
+    candidate_options:
+      - "全ユーザー許可"
+      - "管理者のみ許可"
+      - "ダウンロード不可"
+
+  - id: "P012"
+    title: "システム構成"
+    description: "オンプレミス、クラウド、Docker構成などのインフラ方針が未決"
+    candidate_options:
+      - "オンプレミスサーバー"
+      - "クラウドサーバー"
+      - "Docker Compose構成"
+      - "AWS構成"
+
+
+# ==============================================================================
+# Ver0.8時点の確定事項
+# ==============================================================================
+confirmed_items:
+  - "管理対象カメラは約100台程度"
+  - "サーバーがカメラに接続して静止画を取得する"
+  - "取得タイミングは最短1分"
+  - "取得間隔は任意に設定可能"
+  - "ユーザー種別はシステム管理者、企業管理者、現場管理者、一般ユーザー"
+  - "システム管理者はログイン後に企業選択画面を表示する"
+  - "企業管理者はログイン後に現場選択画面を表示する"
+  - "現場管理者、一般ユーザーはログイン後にカメラリスト・静止画サムネイル画面を表示する"
+  - "カメラリストは画面左側に表示する"
+  - "静止画サムネイルは画面右側に一覧表示する"
+  - "サムネイルをダブルクリックすると原寸画像を表示する"
+  - "日付選択はカレンダーから行う"
+  - "デフォルトでは最新画像が存在する日付を表示する"
+  - "画像が存在しない日はカレンダーで選択不可とする"
+  - "画像はサーバーの特定フォルダに、企業・現場・カメラ・日付単位で保存する"
+  - "カメラ登録はシステム管理者、企業管理者、現場管理者が可能"
+  - "一般ユーザーはカメラ登録不可"
+  - "サムネイル画面に設定メニューを用意する"
+  - "設定メニューからカメラ設定画面を表示する"
+  - "カメラ設定画面にはカメラリストを表示する"
+  - "カメラの再設定が可能"
+  - "カメラ登録画面と再設定画面は共通とする"
+  - "カメラ削除は可能"
+  - "接続テスト機能を持つ"
+  - "パスワード変更は上書き方式とする"
+  - "保存画質はサーバー側で変換する"
+  - "複数カメラの最新画像をまとめて表示する機能を持つ"
+  - "左側のカメラメニューにチェックマークを入れて複数カメラを選択する"
+  - "まとめて参照ボタン押下で複数カメラ最新画像画面に遷移する"
+  - "複数カメラ最新画像画面では最新画像を常に表示する"
+

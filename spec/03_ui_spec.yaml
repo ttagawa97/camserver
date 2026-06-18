@@ -1,0 +1,1548 @@
+# ==============================================================================
+# 03_ui_spec.yaml
+# ==============================================================================
+# システム名:
+#   インターネットカメラ静止画管理システム
+#
+# 目的:
+#   本ファイルでは、画面構成、画面遷移、UI部品、権限別表示制御、
+#   操作イベント、入力項目、バリデーション、画面更新仕様を定義する。
+#
+# 本ファイルの位置づけ:
+#   - 01_overall_spec.yaml で定義した全体仕様をもとに、UI仕様を定義する。
+#   - 02_data_spec.yaml で定義したデータを画面上でどのように扱うかを定義する。
+#   - API仕様の詳細は 04_api_spec.yaml に分割する。
+#   - インフラ、バッチ、自動取得処理は 05_infra_spec.yaml に分割する。
+#
+# 分割ファイル構成:
+#   - 01_overall_spec.yaml : 全体仕様
+#   - 02_data_spec.yaml    : データ仕様・フォルダ構成・画像保存仕様
+#   - 03_ui_spec.yaml      : UI仕様・画面遷移・画面項目
+#   - 04_api_spec.yaml     : API仕様
+#   - 05_infra_spec.yaml   : インフラ仕様・バッチ・運用構成
+#
+# バージョン:
+#   Ver0.8
+#
+# 注意:
+#   本仕様は現時点の会話内容をもとにした初期整理版であり、
+#   未決事項は pending_items に明示する。
+# ==============================================================================
+
+
+# ==============================================================================
+# 修正履歴
+# ==============================================================================
+revision_history:
+  - version: "0.8"
+    date: "2026-06-18"
+    author: "ChatGPT"
+    changes:
+      - "初版作成"
+      - "ログイン画面、企業選択画面、現場選択画面のUI仕様を定義"
+      - "権限別のログイン後初期画面と画面遷移を定義"
+      - "カメラリスト・静止画サムネイル画面のUI仕様を定義"
+      - "画像存在日付のみ選択可能なカレンダー仕様を定義"
+      - "サムネイルのダブルクリックによる原寸画像表示を定義"
+      - "設定メニュー、カメラ設定画面、カメラ登録・再設定共通画面を定義"
+      - "カメラ削除、接続テスト、パスワード上書き仕様をUI仕様として反映"
+      - "左側カメラメニューのチェック選択と複数カメラ最新画像まとめ表示画面を定義"
+      - "一般ユーザーにはカメラ管理メニューを表示しない制御を定義"
+
+
+# ==============================================================================
+# UI基本方針
+# ==============================================================================
+ui_policy:
+  description: >
+    本システムは、企業、現場、カメラを階層的に選択し、
+    取得済み静止画をサムネイル形式で参照するWeb UIとする。
+    権限に応じて初期表示画面、操作可能範囲、メニュー表示を制御する。
+
+  application_type: "Webアプリケーション"
+
+  primary_layout_policy:
+    - "権限に応じてログイン後の初期画面を切り替える"
+    - "現場選択後、または所属現場が固定されているユーザーでは、カメラリスト・静止画サムネイル画面を表示する"
+    - "カメラリストは画面左側、静止画サムネイル一覧は画面右側に配置する"
+    - "画像が存在する日付のみカレンダーで選択可能とする"
+    - "カメラ管理機能は設定メニューから起動する"
+    - "複数カメラ最新画像まとめ表示は、左側カメラメニューのチェックボックス選択から起動する"
+
+  responsive_policy:
+    desktop_first: true
+    tablet_support: "未決"
+    smartphone_support: "未決"
+    note: "100台規模のカメラ管理画面であるため、Ver0.8ではPCブラウザ利用を主対象とする"
+
+  language:
+    default: "ja-JP"
+
+  timezone:
+    display_timezone: "Asia/Tokyo"
+
+
+# ==============================================================================
+# 画面ID一覧
+# ==============================================================================
+screens:
+  - screen_id: "SCR_LOGIN"
+    name: "ログイン画面"
+
+  - screen_id: "SCR_COMPANY_SELECT"
+    name: "企業選択画面"
+
+  - screen_id: "SCR_SITE_SELECT"
+    name: "現場選択画面"
+
+  - screen_id: "SCR_CAMERA_THUMBNAIL"
+    name: "カメラリスト・静止画サムネイル画面"
+
+  - screen_id: "SCR_ORIGINAL_IMAGE_VIEW"
+    name: "原寸画像表示画面"
+
+  - screen_id: "SCR_CAMERA_SETTING"
+    name: "カメラ設定画面"
+
+  - screen_id: "SCR_CAMERA_FORM"
+    name: "カメラ登録・再設定共通画面"
+
+  - screen_id: "SCR_MULTI_CAMERA_LATEST"
+    name: "複数カメラ最新画像まとめ表示画面"
+
+
+# ==============================================================================
+# 権限別初期画面
+# ==============================================================================
+role_initial_screen:
+  system_admin:
+    role_name: "システム管理者"
+    after_login_screen: "SCR_COMPANY_SELECT"
+    description: "全企業を参照できるため、ログイン後は企業選択画面を表示する"
+
+  company_admin:
+    role_name: "企業管理者"
+    after_login_screen: "SCR_SITE_SELECT"
+    description: "所属企業が固定されるため、ログイン後は現場選択画面を表示する"
+
+  site_admin:
+    role_name: "現場管理者"
+    after_login_screen: "SCR_CAMERA_THUMBNAIL"
+    description: "所属現場が固定されるため、ログイン後はカメラリスト・静止画サムネイル画面を表示する"
+
+  general_user:
+    role_name: "一般ユーザー"
+    after_login_screen: "SCR_CAMERA_THUMBNAIL"
+    description: "所属現場が固定されるため、ログイン後はカメラリスト・静止画サムネイル画面を表示する"
+
+
+# ==============================================================================
+# 共通UI部品
+# ==============================================================================
+common_components:
+  header:
+    description: "全画面共通ヘッダー"
+    display_items:
+      - "システム名"
+      - "ログインユーザー名"
+      - "ユーザー権限"
+      - "ログアウトボタン"
+    optional_items:
+      - "選択中企業名"
+      - "選択中現場名"
+
+  breadcrumb:
+    description: "現在の選択階層を表示する"
+    display_examples:
+      - "企業選択"
+      - "A社 > 現場選択"
+      - "A社 > 札幌第1現場 > カメラ画像"
+    enabled: true
+
+  loading_indicator:
+    description: "API通信中、画像読み込み中に表示する"
+    display_text: "読み込み中..."
+
+  error_message_area:
+    description: "通信エラー、入力エラー、権限エラーなどを表示する共通領域"
+
+  confirm_dialog:
+    description: "削除など取り消しにくい操作の前に確認するダイアログ"
+    buttons:
+      - "OK"
+      - "キャンセル"
+
+  toast_message:
+    description: "保存完了、接続テスト成功など一時的な結果通知に使用する"
+    examples:
+      - "保存しました"
+      - "接続テストに成功しました"
+      - "削除しました"
+
+
+# ==============================================================================
+# 画面遷移定義
+# ==============================================================================
+screen_transitions:
+  login_success:
+    from: "SCR_LOGIN"
+    to_by_role:
+      system_admin: "SCR_COMPANY_SELECT"
+      company_admin: "SCR_SITE_SELECT"
+      site_admin: "SCR_CAMERA_THUMBNAIL"
+      general_user: "SCR_CAMERA_THUMBNAIL"
+
+  company_selected:
+    from: "SCR_COMPANY_SELECT"
+    to: "SCR_SITE_SELECT"
+    allowed_roles:
+      - "system_admin"
+
+  site_selected:
+    from: "SCR_SITE_SELECT"
+    to: "SCR_CAMERA_THUMBNAIL"
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+
+  open_original_image:
+    from: "SCR_CAMERA_THUMBNAIL"
+    to: "SCR_ORIGINAL_IMAGE_VIEW"
+    trigger: "サムネイルをダブルクリック"
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+      - "general_user"
+
+  open_camera_setting:
+    from: "SCR_CAMERA_THUMBNAIL"
+    to: "SCR_CAMERA_SETTING"
+    trigger: "設定メニューからカメラ設定を選択"
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+
+  open_camera_add_form:
+    from: "SCR_CAMERA_SETTING"
+    to: "SCR_CAMERA_FORM"
+    trigger: "カメラ追加ボタン押下"
+    mode: "add"
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+
+  open_camera_edit_form:
+    from: "SCR_CAMERA_SETTING"
+    to: "SCR_CAMERA_FORM"
+    trigger: "カメラ行の編集ボタン押下、または行ダブルクリック"
+    mode: "edit"
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+
+  open_multi_camera_latest:
+    from: "SCR_CAMERA_THUMBNAIL"
+    to: "SCR_MULTI_CAMERA_LATEST"
+    trigger: "左側カメラメニューでチェックを入れ、まとめて参照ボタンを押下"
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+      - "general_user"
+
+  back_to_thumbnail:
+    from:
+      - "SCR_ORIGINAL_IMAGE_VIEW"
+      - "SCR_CAMERA_SETTING"
+      - "SCR_MULTI_CAMERA_LATEST"
+    to: "SCR_CAMERA_THUMBNAIL"
+    trigger: "戻るボタン押下"
+
+
+# ==============================================================================
+# SCR_LOGIN: ログイン画面
+# ==============================================================================
+SCR_LOGIN:
+  name: "ログイン画面"
+  purpose: "ユーザーがログインIDとパスワードを入力し、システムにログインする"
+
+  access:
+    public: true
+    required_authentication: false
+
+  layout:
+    type: "centered_form"
+    components:
+      - "システム名"
+      - "ログインID入力"
+      - "パスワード入力"
+      - "ログインボタン"
+      - "エラーメッセージ表示領域"
+
+  fields:
+    login_id:
+      label: "ログインID"
+      input_type: "text"
+      required: true
+      placeholder: "ログインIDを入力"
+
+    password:
+      label: "パスワード"
+      input_type: "password"
+      required: true
+      placeholder: "パスワードを入力"
+
+  actions:
+    login:
+      label: "ログイン"
+      trigger: "ボタン押下"
+      validation:
+        - "ログインID必須"
+        - "パスワード必須"
+      success:
+        description: "認証成功後、権限に応じた初期画面へ遷移する"
+        transition_rule: "role_initial_screen に従う"
+      failure:
+        message: "ログインIDまたはパスワードが正しくありません"
+
+  notes:
+    - "パスワード再発行機能の有無はVer0.8では未決"
+    - "ログイン保持、セッションタイムアウトは04_api_spec.yamlまたは05_infra_spec.yamlで定義予定"
+
+
+# ==============================================================================
+# SCR_COMPANY_SELECT: 企業選択画面
+# ==============================================================================
+SCR_COMPANY_SELECT:
+  name: "企業選択画面"
+  purpose: "システム管理者が参照・管理対象の企業を選択する"
+
+  access:
+    allowed_roles:
+      - "system_admin"
+    denied_roles:
+      - "company_admin"
+      - "site_admin"
+      - "general_user"
+
+  layout:
+    type: "list_or_card_selection"
+    components:
+      - "ヘッダー"
+      - "パンくず"
+      - "企業一覧"
+      - "検索・絞り込み欄"
+      - "選択ボタン"
+
+  display_items:
+    company_list:
+      source: "company"
+      columns:
+        - key: "company_name"
+          label: "企業名"
+        - key: "status"
+          label: "状態"
+        - key: "site_count"
+          label: "現場数"
+          optional: true
+        - key: "camera_count"
+          label: "カメラ数"
+          optional: true
+
+  actions:
+    select_company:
+      label: "選択"
+      trigger:
+        - "企業行をクリックして選択ボタン押下"
+        - "企業行をダブルクリック"
+      result:
+        selected_context:
+          - "company_id"
+          - "company_name"
+        transition_to: "SCR_SITE_SELECT"
+
+    search_company:
+      label: "検索"
+      trigger: "検索条件入力"
+      behavior: "企業名で絞り込み"
+
+  empty_state:
+    message: "表示可能な企業がありません"
+
+  notes:
+    - "企業の追加・変更・削除画面はVer0.8では未定義"
+    - "企業マスタ管理を追加する場合は別画面として定義予定"
+
+
+# ==============================================================================
+# SCR_SITE_SELECT: 現場選択画面
+# ==============================================================================
+SCR_SITE_SELECT:
+  name: "現場選択画面"
+  purpose: "対象企業配下の現場を選択する"
+
+  access:
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+    denied_roles:
+      - "site_admin"
+      - "general_user"
+
+  context:
+    system_admin:
+      required_context:
+        - "selected_company_id"
+      description: "企業選択画面で選択された企業配下の現場を表示する"
+
+    company_admin:
+      required_context:
+        - "user.company_id"
+      description: "ログインユーザーの所属企業配下の現場を表示する"
+
+  layout:
+    type: "list_or_card_selection"
+    components:
+      - "ヘッダー"
+      - "パンくず"
+      - "現場一覧"
+      - "検索・絞り込み欄"
+      - "選択ボタン"
+      - "戻るボタン"
+
+  display_items:
+    site_list:
+      source: "site"
+      columns:
+        - key: "site_name"
+          label: "現場名"
+        - key: "status"
+          label: "状態"
+        - key: "camera_count"
+          label: "カメラ数"
+          optional: true
+        - key: "latest_captured_at"
+          label: "最新取得日時"
+          optional: true
+
+  actions:
+    select_site:
+      label: "選択"
+      trigger:
+        - "現場行をクリックして選択ボタン押下"
+        - "現場行をダブルクリック"
+      result:
+        selected_context:
+          - "site_id"
+          - "site_name"
+        transition_to: "SCR_CAMERA_THUMBNAIL"
+
+    search_site:
+      label: "検索"
+      trigger: "検索条件入力"
+      behavior: "現場名で絞り込み"
+
+    back:
+      label: "戻る"
+      visible_roles:
+        - "system_admin"
+      transition_to: "SCR_COMPANY_SELECT"
+
+  empty_state:
+    message: "表示可能な現場がありません"
+
+  notes:
+    - "現場の追加・変更・削除画面はVer0.8では未定義"
+    - "企業管理者に現場管理を許可するかは全体仕様側の未決事項に従う"
+
+
+# ==============================================================================
+# SCR_CAMERA_THUMBNAIL: カメラリスト・静止画サムネイル画面
+# ==============================================================================
+SCR_CAMERA_THUMBNAIL:
+  name: "カメラリスト・静止画サムネイル画面"
+  purpose: "選択中または所属現場のカメラ一覧と、取得済み静止画サムネイルを表示する"
+
+  access:
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+      - "general_user"
+
+  context:
+    system_admin:
+      required_context:
+        - "selected_company_id"
+        - "selected_site_id"
+
+    company_admin:
+      required_context:
+        - "user.company_id"
+        - "selected_site_id"
+
+    site_admin:
+      required_context:
+        - "user.company_id"
+        - "user.site_id"
+
+    general_user:
+      required_context:
+        - "user.company_id"
+        - "user.site_id"
+
+  layout:
+    type: "two_pane"
+    header_area:
+      components:
+        - "ヘッダー"
+        - "パンくず"
+        - "選択中企業名"
+        - "選択中現場名"
+        - "設定メニュー"
+        - "日付選択カレンダー"
+    left_pane:
+      name: "カメラメニュー"
+      width_policy: "固定または可変"
+      components:
+        - "カメラリスト"
+        - "カメラ選択チェックボックス"
+        - "まとめて参照ボタン"
+    right_pane:
+      name: "静止画サムネイル一覧"
+      components:
+        - "選択日付表示"
+        - "サムネイルグリッド"
+        - "画像なしメッセージ"
+        - "読み込み状態表示"
+
+  camera_menu:
+    description: "画面左側に表示する登録済みカメラリスト"
+    source: "camera"
+    filter: "現在の現場に所属するactiveカメラ"
+    display_items:
+      - key: "checkbox"
+        label: "選択"
+        purpose: "複数カメラ最新画像まとめ表示用"
+      - key: "camera_name"
+        label: "カメラ名"
+      - key: "last_capture_status"
+        label: "状態"
+        optional: true
+      - key: "last_capture_at"
+        label: "最終取得"
+        optional: true
+
+    status_display:
+      success:
+        label: "正常"
+      failed:
+        label: "取得失敗"
+      not_yet:
+        label: "未取得"
+
+    selection_behavior:
+      single_click:
+        description: "対象カメラを選択し、右側に選択カメラのサムネイルを表示する"
+      checkbox_click:
+        description: "複数カメラ最新画像まとめ表示の対象としてチェック状態を切り替える"
+
+  date_selector:
+    description: "画像が存在する日付のみ選択可能なカレンダー"
+    default_date:
+      value: "latest_available_date"
+      description: "画像が存在する最新日付を初期選択する"
+
+    selectable_date_rule:
+      enabled_dates: "画像が存在する日付"
+      disabled_dates: "画像が存在しない日付"
+
+    date_scope:
+      status: "未決"
+      candidate_options:
+        - "選択中カメラに画像が存在する日付"
+        - "現場内いずれかのカメラに画像が存在する日付"
+      recommendation: "選択中カメラに画像が存在する日付"
+
+    on_change:
+      description: "日付変更時、右側のサムネイル一覧を再取得する"
+
+  thumbnail_grid:
+    description: "右側に表示する静止画サムネイル一覧"
+    source: "captured_image"
+    filter:
+      - "selected_camera_id"
+      - "selected_date"
+    sort:
+      field: "captured_at"
+      order: "desc"
+    display_items:
+      - key: "thumbnail_image"
+        label: "サムネイル"
+      - key: "captured_at"
+        label: "取得時刻"
+      - key: "camera_name"
+        label: "カメラ名"
+        optional: true
+
+    empty_state:
+      message: "選択した日付の画像はありません"
+
+    actions:
+      open_original:
+        trigger: "サムネイルをダブルクリック"
+        transition_to: "SCR_ORIGINAL_IMAGE_VIEW"
+
+  setting_menu:
+    description: "カメラ管理機能を開くための設定メニュー"
+    visible_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+    hidden_roles:
+      - "general_user"
+    menu_items:
+      - key: "camera_setting"
+        label: "カメラ設定"
+        transition_to: "SCR_CAMERA_SETTING"
+
+    notes:
+      - "一般ユーザーには設定メニューを表示しない"
+      - "設定メニューの名称、位置、アイコンは03_ui_specの詳細デザイン段階で調整可能"
+
+  multi_camera_button:
+    label: "まとめて参照"
+    description: "チェックされた複数カメラの最新画像まとめ表示画面へ遷移する"
+    visible_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+      - "general_user"
+    enabled_condition:
+      - "チェックされたカメラが1台以上存在する"
+    disabled_condition:
+      - "チェックされたカメラが0台"
+    action:
+      transition_to: "SCR_MULTI_CAMERA_LATEST"
+      pass_parameters:
+        - "selected_camera_ids"
+
+  navigation_actions:
+    back_to_site_select:
+      label: "現場選択へ戻る"
+      visible_roles:
+        - "system_admin"
+        - "company_admin"
+      transition_to: "SCR_SITE_SELECT"
+
+    back_to_company_select:
+      label: "企業選択へ戻る"
+      visible_roles:
+        - "system_admin"
+      transition_to: "SCR_COMPANY_SELECT"
+
+  notes:
+    - "サムネイル画面は過去画像参照が主目的"
+    - "複数カメラ最新画像まとめ表示画面は現在状況の監視が主目的"
+    - "画面自体がカメラへ直接アクセスすることは禁止し、サーバー保存済み画像を参照する"
+
+
+# ==============================================================================
+# SCR_ORIGINAL_IMAGE_VIEW: 原寸画像表示画面
+# ==============================================================================
+SCR_ORIGINAL_IMAGE_VIEW:
+  name: "原寸画像表示画面"
+  purpose: "サムネイルで選択された画像を原寸表示する"
+
+  access:
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+      - "general_user"
+
+  open_trigger:
+    from_screen: "SCR_CAMERA_THUMBNAIL"
+    trigger: "サムネイルをダブルクリック"
+
+  layout:
+    type: "modal_or_page"
+    status: "未決"
+    recommendation: "モーダル表示"
+    components:
+      - "原寸画像"
+      - "カメラ名"
+      - "取得日時"
+      - "閉じるボタン"
+      - "前の画像ボタン"
+      - "次の画像ボタン"
+
+  display_items:
+    image:
+      source: "captured_image.file_path"
+      label: "原寸画像"
+
+    camera_name:
+      source: "camera.camera_name"
+      label: "カメラ名"
+
+    captured_at:
+      source: "captured_image.captured_at"
+      label: "取得日時"
+
+    image_quality:
+      source: "captured_image.image_quality"
+      label: "保存画質"
+      optional: true
+
+  actions:
+    close:
+      label: "閉じる"
+      behavior: "元のサムネイル画面に戻る"
+
+    previous_image:
+      label: "前へ"
+      behavior: "同一カメラ・同一日付内で前の画像を表示"
+      status: "未決"
+
+    next_image:
+      label: "次へ"
+      behavior: "同一カメラ・同一日付内で次の画像を表示"
+      status: "未決"
+
+    download:
+      label: "ダウンロード"
+      visible: "未決"
+      description: "画像ダウンロード可否が未決のためVer0.8では保留"
+
+  notes:
+    - "原寸画像とは、サーバー側で保存画質に変換された保存画像を指す"
+    - "カメラから取得した変換前画像を保持するかは02_data_spec.yamlの未決事項に従う"
+
+
+# ==============================================================================
+# SCR_CAMERA_SETTING: カメラ設定画面
+# ==============================================================================
+SCR_CAMERA_SETTING:
+  name: "カメラ設定画面"
+  purpose: "登録済みカメラ一覧を表示し、カメラ追加、再設定、削除、接続テストを実行する"
+
+  access:
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+    denied_roles:
+      - "general_user"
+
+  context:
+    system_admin:
+      required_context:
+        - "selected_company_id"
+        - "selected_site_id"
+
+    company_admin:
+      required_context:
+        - "user.company_id"
+        - "selected_site_id"
+
+    site_admin:
+      required_context:
+        - "user.company_id"
+        - "user.site_id"
+
+  layout:
+    type: "table_management"
+    components:
+      - "ヘッダー"
+      - "パンくず"
+      - "カメラ追加ボタン"
+      - "カメラ一覧テーブル"
+      - "戻るボタン"
+      - "結果メッセージ表示領域"
+
+  camera_table:
+    source: "camera"
+    filter: "現在の現場に所属するactiveカメラ"
+    columns:
+      - key: "camera_name"
+        label: "カメラ名"
+      - key: "address"
+        label: "アドレス"
+      - key: "auth_method"
+        label: "認証方式"
+      - key: "capture_interval_minutes"
+        label: "取得間隔"
+        format: "{value}分"
+      - key: "image_quality"
+        label: "保存画質"
+      - key: "retention_days"
+        label: "保存期間"
+        format: "{value}日"
+      - key: "last_capture_status"
+        label: "取得状態"
+      - key: "last_capture_at"
+        label: "最終取得日時"
+      - key: "actions"
+        label: "操作"
+        buttons:
+          - "編集"
+          - "削除"
+          - "接続テスト"
+
+  actions:
+    add_camera:
+      label: "カメラ追加"
+      trigger: "ボタン押下"
+      transition_to: "SCR_CAMERA_FORM"
+      mode: "add"
+
+    edit_camera:
+      label: "編集"
+      trigger:
+        - "編集ボタン押下"
+        - "カメラ行ダブルクリック"
+      transition_to: "SCR_CAMERA_FORM"
+      mode: "edit"
+      pass_parameters:
+        - "camera_id"
+
+    delete_camera:
+      label: "削除"
+      trigger: "削除ボタン押下"
+      confirmation:
+        required: true
+        title: "カメラ削除確認"
+        message: "選択したカメラを削除します。よろしいですか？"
+        buttons:
+          - "削除"
+          - "キャンセル"
+      result:
+        success_message: "カメラを削除しました"
+        failure_message: "カメラの削除に失敗しました"
+      note: "保存済み画像を削除するかは未決"
+
+    connection_test:
+      label: "接続テスト"
+      trigger: "接続テストボタン押下"
+      description: "登録済みのカメラ設定を使用して接続テストを実行する"
+      result:
+        success_message: "接続テストに成功しました"
+        failure_message: "接続テストに失敗しました"
+      optional_preview:
+        enabled: "未決"
+        description: "成功時に取得画像プレビューを表示するかは未決"
+
+    back:
+      label: "戻る"
+      transition_to: "SCR_CAMERA_THUMBNAIL"
+
+  empty_state:
+    message: "登録済みカメラがありません"
+    suggested_action: "カメラ追加ボタンからカメラを登録してください"
+
+  notes:
+    - "一般ユーザーはこの画面へ遷移不可"
+    - "カメラ削除方式は02_data_spec.yamlの未決事項に従う"
+    - "接続テストは入力中フォームからも実行可能とする"
+
+
+# ==============================================================================
+# SCR_CAMERA_FORM: カメラ登録・再設定共通画面
+# ==============================================================================
+SCR_CAMERA_FORM:
+  name: "カメラ登録・再設定共通画面"
+  purpose: "新規カメラ登録、および既存カメラの再設定を共通フォームで行う"
+
+  access:
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+    denied_roles:
+      - "general_user"
+
+  modes:
+    add:
+      title: "カメラ追加"
+      description: "新規カメラを登録する"
+      required_context:
+        - "company_id"
+        - "site_id"
+
+    edit:
+      title: "カメラ再設定"
+      description: "既存カメラの設定を変更する"
+      required_context:
+        - "camera_id"
+
+  layout:
+    type: "form"
+    components:
+      - "画面タイトル"
+      - "カメラ名入力"
+      - "アドレス入力"
+      - "認証方式選択"
+      - "ID入力"
+      - "パスワード入力"
+      - "取得間隔入力"
+      - "保存画質選択"
+      - "保存期間入力"
+      - "接続テストボタン"
+      - "保存ボタン"
+      - "キャンセルボタン"
+      - "入力エラーメッセージ表示領域"
+      - "接続テスト結果表示領域"
+
+  fields:
+    camera_name:
+      label: "カメラ名"
+      input_type: "text"
+      required: true
+      max_length: 100
+      placeholder: "例：正面入口カメラ"
+
+    address:
+      label: "アドレス"
+      input_type: "text"
+      required: true
+      max_length: 2048
+      placeholder: "例：http://192.168.1.10/snapshot.jpg"
+      validation:
+        - "HTTPまたはHTTPS形式"
+      note: "RTSP等を許可するかは未決"
+
+    auth_method:
+      label: "認証方式"
+      input_type: "select"
+      required: true
+      allowed_values:
+        - value: "basic"
+          label: "BASIC認証"
+      default: "basic"
+      disabled: true
+      note: "Ver0.8ではBASIC認証のみのため固定表示でも可"
+
+    login_id:
+      label: "ID"
+      input_type: "text"
+      required: true
+      max_length: 255
+      placeholder: "カメラ接続用ID"
+
+    password:
+      label: "パスワード"
+      input_type: "password"
+      required: true
+      max_length: 1024
+      placeholder: "カメラ接続用パスワード"
+      update_rule: "入力値で上書き"
+      note: "再設定時は入力されたパスワードで既存パスワードを上書きする"
+
+    capture_interval_minutes:
+      label: "取得間隔"
+      input_type: "number"
+      required: true
+      unit: "分"
+      min: 1
+      placeholder: "1"
+      description: "静止画取得間隔。最短1分"
+
+    image_quality:
+      label: "保存画質"
+      input_type: "select"
+      required: true
+      allowed_values:
+        - value: "VGA"
+          label: "VGA"
+        - value: "SVGA"
+          label: "SVGA"
+        - value: "WXGA"
+          label: "WXGA"
+        - value: "HD"
+          label: "HD"
+        - value: "FullHD"
+          label: "FullHD"
+        - value: "4K"
+          label: "4K"
+      description: "サーバー側で指定画質へ変換して保存する"
+
+    retention_days:
+      label: "保存期間"
+      input_type: "number"
+      required: true
+      unit: "日"
+      min: 1
+      placeholder: "30"
+      description: "画像ファイルを保存する期間"
+
+  actions:
+    connection_test:
+      label: "接続テスト"
+      trigger: "ボタン押下"
+      description: "フォーム入力中の内容を使ってカメラ接続をテストする"
+      validation_before_test:
+        - "アドレス必須"
+        - "認証方式必須"
+        - "ID必須"
+        - "パスワード必須"
+      success:
+        message: "接続テストに成功しました"
+        optional_display:
+          - "取得画像プレビュー"
+          - "HTTPステータス"
+          - "応答時間"
+      failure:
+        message: "接続テストに失敗しました。アドレス、ID、パスワードを確認してください"
+        optional_display:
+          - "エラー理由"
+          - "HTTPステータス"
+          - "タイムアウト情報"
+
+    save:
+      label: "保存"
+      trigger: "ボタン押下"
+      validation:
+        - "カメラ名必須"
+        - "アドレス必須"
+        - "認証方式必須"
+        - "ID必須"
+        - "パスワード必須"
+        - "取得間隔は1分以上"
+        - "保存画質必須"
+        - "保存期間は1日以上"
+      add_mode:
+        success_message: "カメラを登録しました"
+        transition_to: "SCR_CAMERA_SETTING"
+      edit_mode:
+        success_message: "カメラ設定を保存しました"
+        transition_to: "SCR_CAMERA_SETTING"
+
+    cancel:
+      label: "キャンセル"
+      trigger: "ボタン押下"
+      confirmation_if_dirty:
+        required: true
+        message: "入力内容を破棄して戻ります。よろしいですか？"
+      transition_to: "SCR_CAMERA_SETTING"
+
+  password_display_rule:
+    add_mode:
+      default_value: ""
+      required: true
+
+    edit_mode:
+      display_value: ""
+      required: true
+      update_method: "入力値で上書き"
+      note: "既存パスワードは画面表示しない"
+
+  connection_test_requirement_before_save:
+    status: "未決"
+    candidate_options:
+      - "保存前の接続テスト必須"
+      - "接続テストなしでも保存可能"
+    recommendation: "接続テストなしでも保存可能。ただし警告表示する"
+
+  notes:
+    - "カメラ登録と再設定は同一フォームとする"
+    - "保存画質はサーバー側変換であり、カメラ側の解像度設定ではない"
+    - "接続テストは保存前に実施できるが、必須にするかは未決"
+
+
+# ==============================================================================
+# SCR_MULTI_CAMERA_LATEST: 複数カメラ最新画像まとめ表示画面
+# ==============================================================================
+SCR_MULTI_CAMERA_LATEST:
+  name: "複数カメラ最新画像まとめ表示画面"
+  purpose: "選択された複数カメラの最新画像をまとめて表示し、現場状況を確認する"
+
+  access:
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+      - "general_user"
+
+  entry:
+    from_screen: "SCR_CAMERA_THUMBNAIL"
+    trigger:
+      - "左側カメラメニューで対象カメラにチェックを入れる"
+      - "まとめて参照ボタンを押下"
+    required_parameters:
+      - "selected_camera_ids"
+
+  layout:
+    type: "grid_dashboard"
+    components:
+      - "ヘッダー"
+      - "パンくず"
+      - "選択中企業名"
+      - "選択中現場名"
+      - "最終画面更新日時"
+      - "最新画像カード一覧"
+      - "自動更新状態表示"
+      - "戻るボタン"
+
+  display:
+    card_layout:
+      description: "カメラごとにカード形式で最新画像を表示する"
+      items:
+        - key: "camera_name"
+          label: "カメラ名"
+        - key: "latest_image"
+          label: "最新画像"
+        - key: "latest_captured_at"
+          label: "取得日時"
+        - key: "latest_status"
+          label: "状態"
+        - key: "latest_error"
+          label: "エラー内容"
+          visible_condition: "latest_statusがfailedの場合"
+
+    status_display:
+      success:
+        label: "正常"
+        display: "最新画像を表示"
+      failed:
+        label: "取得失敗"
+        display: "直近の取得失敗情報を表示"
+      not_yet:
+        label: "未取得"
+        display: "未取得メッセージを表示"
+
+  refresh:
+    description: "画面表示中は最新画像を常に表示する"
+    browser_direct_camera_access: false
+    source: "サーバーに保存済みの最新画像"
+    method: "APIによる定期再取得"
+    interval_seconds:
+      status: "未決"
+      candidate_options:
+        - 30
+        - 60
+        - "カメラ取得間隔に合わせる"
+      recommendation: 60
+    update_behavior:
+      - "最新画像の取得日時が変わった場合、画像を差し替える"
+      - "取得状態が変わった場合、状態表示を更新する"
+      - "画面全体を再読み込みせず、カード単位で更新することを推奨"
+
+  actions:
+    open_original:
+      label: "原寸表示"
+      trigger: "最新画像をダブルクリック"
+      transition_to: "SCR_ORIGINAL_IMAGE_VIEW"
+      description: "最新画像を原寸表示する"
+
+    back:
+      label: "戻る"
+      trigger: "戻るボタン押下"
+      transition_to: "SCR_CAMERA_THUMBNAIL"
+
+    manual_refresh:
+      label: "更新"
+      trigger: "更新ボタン押下"
+      status: "任意"
+      description: "自動更新とは別に手動更新を可能にするかは未決"
+
+  empty_state:
+    message: "表示対象のカメラが選択されていません"
+    action: "カメラリスト画面に戻って対象カメラを選択してください"
+
+  notes:
+    - "本画面は現在状況確認用であり、過去画像の一覧参照はSCR_CAMERA_THUMBNAILで行う"
+    - "本画面はカメラに直接接続せず、サーバー保存済み最新画像を表示する"
+    - "100台すべてを選択した場合の表示レイアウト、ページング、仮想スクロール要否は未決"
+
+
+# ==============================================================================
+# 権限別メニュー表示制御
+# ==============================================================================
+role_based_ui_control:
+  system_admin:
+    visible_screens:
+      - "SCR_COMPANY_SELECT"
+      - "SCR_SITE_SELECT"
+      - "SCR_CAMERA_THUMBNAIL"
+      - "SCR_ORIGINAL_IMAGE_VIEW"
+      - "SCR_CAMERA_SETTING"
+      - "SCR_CAMERA_FORM"
+      - "SCR_MULTI_CAMERA_LATEST"
+    visible_menus:
+      - "設定メニュー"
+      - "カメラ設定"
+      - "まとめて参照"
+    allowed_actions:
+      - "企業選択"
+      - "現場選択"
+      - "画像閲覧"
+      - "原寸表示"
+      - "複数カメラ最新画像表示"
+      - "カメラ追加"
+      - "カメラ再設定"
+      - "カメラ削除"
+      - "接続テスト"
+
+  company_admin:
+    visible_screens:
+      - "SCR_SITE_SELECT"
+      - "SCR_CAMERA_THUMBNAIL"
+      - "SCR_ORIGINAL_IMAGE_VIEW"
+      - "SCR_CAMERA_SETTING"
+      - "SCR_CAMERA_FORM"
+      - "SCR_MULTI_CAMERA_LATEST"
+    visible_menus:
+      - "設定メニュー"
+      - "カメラ設定"
+      - "まとめて参照"
+    allowed_actions:
+      - "現場選択"
+      - "画像閲覧"
+      - "原寸表示"
+      - "複数カメラ最新画像表示"
+      - "カメラ追加"
+      - "カメラ再設定"
+      - "カメラ削除"
+      - "接続テスト"
+
+  site_admin:
+    visible_screens:
+      - "SCR_CAMERA_THUMBNAIL"
+      - "SCR_ORIGINAL_IMAGE_VIEW"
+      - "SCR_CAMERA_SETTING"
+      - "SCR_CAMERA_FORM"
+      - "SCR_MULTI_CAMERA_LATEST"
+    visible_menus:
+      - "設定メニュー"
+      - "カメラ設定"
+      - "まとめて参照"
+    allowed_actions:
+      - "画像閲覧"
+      - "原寸表示"
+      - "複数カメラ最新画像表示"
+      - "カメラ追加"
+      - "カメラ再設定"
+      - "カメラ削除"
+      - "接続テスト"
+
+  general_user:
+    visible_screens:
+      - "SCR_CAMERA_THUMBNAIL"
+      - "SCR_ORIGINAL_IMAGE_VIEW"
+      - "SCR_MULTI_CAMERA_LATEST"
+    visible_menus:
+      - "まとめて参照"
+    hidden_menus:
+      - "設定メニュー"
+      - "カメラ設定"
+    allowed_actions:
+      - "画像閲覧"
+      - "原寸表示"
+      - "複数カメラ最新画像表示"
+    denied_actions:
+      - "カメラ追加"
+      - "カメラ再設定"
+      - "カメラ削除"
+      - "接続テスト"
+
+
+# ==============================================================================
+# UIバリデーション共通ルール
+# ==============================================================================
+ui_validation_rules:
+  required_field:
+    message: "{field_label}は必須です"
+
+  max_length:
+    message: "{field_label}は{max_length}文字以内で入力してください"
+
+  numeric_min:
+    message: "{field_label}は{min}以上で入力してください"
+
+  camera_address:
+    allowed_formats:
+      - "http://..."
+      - "https://..."
+    message: "アドレスはHTTPまたはHTTPS形式で入力してください"
+
+  capture_interval:
+    min: 1
+    unit: "分"
+    message: "取得間隔は1分以上で入力してください"
+
+  retention_days:
+    min: 1
+    unit: "日"
+    message: "保存期間は1日以上で入力してください"
+
+  selected_camera_for_multi_view:
+    min_count: 1
+    message: "まとめて参照するカメラを1台以上選択してください"
+
+
+# ==============================================================================
+# 画面エラーハンドリング
+# ==============================================================================
+ui_error_handling:
+  authentication_error:
+    message: "ログインIDまたはパスワードが正しくありません"
+
+  authorization_error:
+    message: "この操作を行う権限がありません"
+
+  api_error:
+    message: "サーバーとの通信に失敗しました"
+
+  image_load_error:
+    message: "画像を読み込めませんでした"
+
+  camera_connection_test_error:
+    message: "接続テストに失敗しました。アドレス、ID、パスワードを確認してください"
+
+  camera_save_error:
+    message: "カメラ設定の保存に失敗しました"
+
+  camera_delete_error:
+    message: "カメラの削除に失敗しました"
+
+  no_image_date_error:
+    message: "選択可能な画像日付がありません"
+
+  session_timeout:
+    message: "セッションが切れました。再度ログインしてください"
+    transition_to: "SCR_LOGIN"
+
+
+# ==============================================================================
+# UI更新・自動更新方針
+# ==============================================================================
+ui_refresh_policy:
+  thumbnail_screen:
+    auto_refresh:
+      enabled: false
+      description: "通常のサムネイル画面は過去画像参照が主目的のため、Ver0.8では自動更新なし"
+    manual_refresh:
+      enabled: "未決"
+
+  multi_camera_latest_screen:
+    auto_refresh:
+      enabled: true
+      description: "複数カメラ最新画像画面は最新画像を常に表示するため、自動更新を行う"
+      interval_seconds: "未決"
+      recommendation: 60
+    manual_refresh:
+      enabled: "未決"
+
+  camera_setting_screen:
+    auto_refresh:
+      enabled: false
+      description: "設定画面は自動更新しない"
+
+
+# ==============================================================================
+# 画面レイアウトイメージ
+# ==============================================================================
+layout_examples:
+  camera_thumbnail_screen:
+    description: "カメラリスト・静止画サムネイル画面の概念レイアウト"
+    ascii: |
+      ┌────────────────────────────────────────────────────────────┐
+      │ ヘッダー / ユーザー情報 / 設定メニュー / 日付選択           │
+      ├──────────────────┬─────────────────────────────────────────┤
+      │ カメラメニュー     │ 静止画サムネイル一覧                    │
+      │                  │                                         │
+      │ ☑ Camera001      │ [画像] [画像] [画像] [画像]              │
+      │ ☐ Camera002      │ [画像] [画像] [画像] [画像]              │
+      │ ☑ Camera003      │                                         │
+      │                  │                                         │
+      │ [まとめて参照]    │ ※ダブルクリックで原寸表示                │
+      └──────────────────┴─────────────────────────────────────────┘
+
+  camera_setting_screen:
+    description: "カメラ設定画面の概念レイアウト"
+    ascii: |
+      ┌────────────────────────────────────────────────────────────┐
+      │ カメラ設定                                                  │
+      ├────────────────────────────────────────────────────────────┤
+      │ [＋ カメラ追加]                                             │
+      │                                                            │
+      │ カメラ名 | アドレス | 認証方式 | 取得間隔 | 保存画質 | 操作  │
+      │ Camera001 | http://... | BASIC | 1分 | FullHD | 編集 削除 接続 │
+      │ Camera002 | http://... | BASIC | 5分 | VGA    | 編集 削除 接続 │
+      └────────────────────────────────────────────────────────────┘
+
+  camera_form_screen:
+    description: "カメラ登録・再設定共通画面の概念レイアウト"
+    ascii: |
+      ┌──────────────────────────────┐
+      │ カメラ追加 / カメラ再設定      │
+      ├──────────────────────────────┤
+      │ カメラ名      [             ] │
+      │ アドレス      [             ] │
+      │ 認証方式      [BASIC認証 ▼  ] │
+      │ ID            [             ] │
+      │ パスワード    [********     ] │
+      │ 取得間隔      [1] 分          │
+      │ 保存画質      [FullHD ▼     ] │
+      │ 保存期間      [30] 日         │
+      │                              │
+      │ [接続テスト] [保存] [キャンセル] │
+      └──────────────────────────────┘
+
+  multi_camera_latest_screen:
+    description: "複数カメラ最新画像まとめ表示画面の概念レイアウト"
+    ascii: |
+      ┌────────────────────────────────────────────────────────────┐
+      │ 複数カメラ最新画像 / 最終更新: 2026-06-18 14:30:00          │
+      ├────────────────────────────────────────────────────────────┤
+      │ ┌────────────┐ ┌────────────┐ ┌────────────┐               │
+      │ │ Camera001  │ │ Camera002  │ │ Camera003  │               │
+      │ │ 14:29取得  │ │ 14:30取得  │ │ 取得失敗    │               │
+      │ │ [最新画像] │ │ [最新画像] │ │ [エラー]    │               │
+      │ └────────────┘ └────────────┘ └────────────┘               │
+      │                                                            │
+      │ [戻る]                                                     │
+      └────────────────────────────────────────────────────────────┘
+
+
+# ==============================================================================
+# Ver0.8時点の確定事項
+# ==============================================================================
+confirmed_items:
+  - "ログイン後の初期画面は権限により異なる"
+  - "システム管理者は企業選択画面から開始する"
+  - "企業管理者は現場選択画面から開始する"
+  - "現場管理者、一般ユーザーはカメラリスト・静止画サムネイル画面から開始する"
+  - "カメラリストは画面左側に表示する"
+  - "静止画サムネイル一覧は画面右側に表示する"
+  - "サムネイルをダブルクリックすると原寸画像を表示する"
+  - "日付選択はカレンダーで行う"
+  - "画像が存在する日付のみ選択可能とする"
+  - "デフォルトでは最新画像が存在する日付を表示する"
+  - "サムネイル画面に設定メニューを用意する"
+  - "設定メニューはシステム管理者、企業管理者、現場管理者に表示する"
+  - "一般ユーザーには設定メニューを表示しない"
+  - "カメラ設定画面にはカメラリストを表示する"
+  - "カメラ登録と再設定は共通フォームとする"
+  - "カメラ削除は可能"
+  - "接続テストは可能"
+  - "パスワード変更は入力値で上書きする"
+  - "保存画質はサーバー側で変換する前提で選択する"
+  - "左側カメラメニューのチェックボックスで複数カメラを選択できる"
+  - "まとめて参照ボタンで複数カメラ最新画像まとめ表示画面へ遷移する"
+  - "複数カメラ最新画像まとめ表示画面では最新画像を常に表示する"
+  - "画面はカメラへ直接接続せず、サーバー保存済み画像を参照する"
+
+
+# ==============================================================================
+# 未決事項
+# ========================================================================
+pending_items:
+  - id: "U001"
+    title: "スマートフォン対応"
+    description: "スマートフォン表示を正式対応範囲に含めるか未決"
+    candidate_options:
+      - "PCブラウザのみ"
+      - "PCブラウザ＋タブレット"
+      - "PCブラウザ＋タブレット＋スマートフォン"
+    recommendation: "PCブラウザ中心"
+
+  - id: "U002"
+    title: "原寸画像表示方式"
+    description: "原寸画像をモーダル表示にするか、別画面表示にするか未決"
+    candidate_options:
+      - "モーダル表示"
+      - "別画面表示"
+      - "別タブ表示"
+    recommendation: "モーダル表示"
+
+  - id: "U003"
+    title: "画像ダウンロード可否"
+    description: "原寸画像のダウンロードボタンを表示するか未決"
+    candidate_options:
+      - "全ユーザー許可"
+      - "管理者のみ許可"
+      - "許可しない"
+
+  - id: "U004"
+    title: "通常サムネイル画面の自動更新"
+    description: "通常のサムネイル画面でも自動更新するか未決"
+    candidate_options:
+      - "自動更新しない"
+      - "一定間隔で自動更新する"
+      - "手動更新のみ"
+    recommendation: "自動更新しない"
+
+  - id: "U005"
+    title: "複数カメラ最新画像画面の更新間隔"
+    description: "最新画像を再取得する画面更新間隔が未決"
+    candidate_options:
+      - "30秒"
+      - "60秒"
+      - "カメラ取得間隔に合わせる"
+    recommendation: "60秒"
+
+  - id: "U006"
+    title: "接続テスト成功時の画像プレビュー"
+    description: "接続テスト成功時に取得画像プレビューを表示するか未決"
+    candidate_options:
+      - "表示する"
+      - "表示しない"
+    recommendation: "表示する"
+
+  - id: "U007"
+    title: "保存前の接続テスト必須化"
+    description: "カメラ保存前に接続テスト成功を必須にするか未決"
+    candidate_options:
+      - "必須にする"
+      - "任意にする"
+    recommendation: "任意にする"
+
+  - id: "U008"
+    title: "カメラ削除時の確認内容"
+    description: "カメラ削除時に保存済み画像の削除有無を選択させるか未決"
+    candidate_options:
+      - "カメラ設定のみ削除"
+      - "保存済み画像も削除"
+      - "削除時に選択"
+    recommendation: "カメラ設定のみ削除"
+
+  - id: "U009"
+    title: "カレンダーの日付判定単位"
+    description: "画像存在日付を選択中カメラ単位で判定するか、現場全体で判定するか未決"
+    candidate_options:
+      - "選択中カメラ単位"
+      - "現場全体単位"
+      - "両方切替可能"
+    recommendation: "選択中カメラ単位"
+
+  - id: "U010"
+    title: "100台選択時のまとめ表示レイアウト"
+    description: "複数カメラ最新画像画面で100台程度を表示する場合のページング、スクロール、表示サイズが未決"
+    candidate_options:
+      - "グリッド＋スクロール"
+      - "ページング"
+      - "表示列数切替"
+      - "仮想スクロール"
+    recommendation: "グリッド＋スクロール"
+
+  - id: "U011"
+    title: "前後画像ナビゲーション"
+    description: "原寸画像表示時に前の画像、次の画像ボタンを実装するか未決"
+    candidate_options:
+      - "実装する"
+      - "実装しない"
+    recommendation: "実装する"
+
+  - id: "U012"
+    title: "企業・現場管理画面"
+    description: "企業追加、現場追加削除画面の詳細は未定義"
+    candidate_options:
+      - "本システムに含める"
+      - "管理者が別途DB登録する"
+      - "後続バージョンで追加"
