@@ -4,9 +4,11 @@ Camera image capture tasks.
 
 import logging
 import os
+import subprocess
 from io import BytesIO
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 import requests
 from requests.auth import HTTPBasicAuth
@@ -17,6 +19,104 @@ from django.conf import settings
 from core.models import Camera, Image, CameraSchedule
 
 logger = logging.getLogger(__name__)
+
+_WINDOWS_HOST_CACHE = None
+
+
+def _is_wsl():
+    try:
+        with open('/proc/sys/kernel/osrelease', 'r', encoding='utf-8') as f:
+            return 'microsoft' in f.read().lower()
+    except OSError:
+        return False
+
+
+def _windows_host_candidates():
+    """WSLからWindows側localhostサービスへ接続するための候補IPを返す。"""
+    global _WINDOWS_HOST_CACHE
+
+    configured = getattr(settings, 'CAMERA_LOCALHOST_FALLBACK_HOSTS', [])
+    if isinstance(configured, str):
+        configured = [host.strip() for host in configured.split(',') if host.strip()]
+
+    candidates = list(configured)
+    if not _is_wsl():
+        return candidates
+
+    if _WINDOWS_HOST_CACHE is not None:
+        return candidates + _WINDOWS_HOST_CACHE
+
+    discovered = []
+    try:
+        result = subprocess.run(
+            [
+                'powershell.exe',
+                '-NoProfile',
+                '-Command',
+                "Get-NetIPAddress -AddressFamily IPv4 | "
+                "Sort-Object @{Expression={if ($_.InterfaceAlias -like '*WSL*') {0} elseif ($_.InterfaceAlias -like '*Wi-Fi*' -or $_.InterfaceAlias -like '*Ethernet*') {1} else {2}}} | "
+                "ForEach-Object { $_.IPAddress }",
+            ],
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='ignore',
+            timeout=2,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            for line in result.stdout.splitlines():
+                ip = line.strip()
+                if ip and not ip.startswith(('127.', '169.254.')) and ip not in discovered:
+                    discovered.append(ip)
+    except Exception as e:
+        logger.debug(f'Failed to discover Windows host IPs: {e}')
+
+    _WINDOWS_HOST_CACHE = discovered
+    return candidates + discovered
+
+
+def _camera_url_candidates(url):
+    parsed = urlparse(url)
+    if parsed.hostname not in ('localhost', '127.0.0.1', '::1'):
+        return [url]
+
+    candidates = [url]
+    for host in _windows_host_candidates():
+        netloc = host
+        if parsed.port:
+            netloc = f'{host}:{parsed.port}'
+        candidate = urlunparse(parsed._replace(netloc=netloc))
+        if candidate not in candidates:
+            candidates.append(candidate)
+    return candidates
+
+
+def _camera_auth(camera):
+    if camera.username and camera.password:
+        return HTTPBasicAuth(camera.username, camera.password)
+    return None
+
+
+def _request_camera(camera, timeout):
+    last_error = None
+    for url in _camera_url_candidates(camera.url):
+        try:
+            response = requests.get(
+                url,
+                auth=_camera_auth(camera),
+                timeout=timeout,
+                verify=False,
+            )
+            response.effective_camera_url = url
+            return response
+        except requests.exceptions.RequestException as e:
+            last_error = e
+            logger.warning(f"Camera {camera.id} request failed for {url}: {e}")
+
+    if last_error:
+        raise last_error
+    raise requests.exceptions.ConnectionError('No camera URL candidates available')
 
 
 def get_image_storage_path(camera):
@@ -62,16 +162,7 @@ def test_camera_connection(camera):
     try:
         logger.info(f"Testing connection to camera {camera.id}: {camera.name}")
 
-        auth = None
-        if camera.username and camera.password:
-            auth = HTTPBasicAuth(camera.username, camera.password)
-
-        response = requests.get(
-            camera.url,
-            auth=auth,
-            timeout=10,
-            verify=False  # 開発環境用
-        )
+        response = _request_camera(camera, timeout=10)
 
         if response.status_code == 200:
             logger.info(f"Camera {camera.id} connection test: SUCCESS")
@@ -79,7 +170,8 @@ def test_camera_connection(camera):
                 'success': True,
                 'message': 'カメラへの接続に成功しました',
                 'status_code': response.status_code,
-                'content_length': len(response.content)
+                'content_length': len(response.content),
+                'effective_url': getattr(response, 'effective_camera_url', camera.url),
             }
         else:
             logger.warning(f"Camera {camera.id} returned status code {response.status_code}")
@@ -126,16 +218,7 @@ def capture_camera_image(camera):
             return None
 
         # 画像ダウンロード
-        auth = None
-        if camera.username and camera.password:
-            auth = HTTPBasicAuth(camera.username, camera.password)
-
-        response = requests.get(
-            camera.url,
-            auth=auth,
-            timeout=30,
-            verify=False
-        )
+        response = _request_camera(camera, timeout=30)
 
         if response.status_code != 200:
             logger.error(f"Failed to capture image from camera {camera.id}: status {response.status_code}")

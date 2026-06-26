@@ -14,7 +14,9 @@ from django.db import IntegrityError, transaction
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import URLValidator
 from django.middleware.csrf import get_token
+from django.conf import settings
 from datetime import datetime, timedelta
+from pathlib import Path
 import re
 
 from core.models import Company, Site, Camera, Image, CameraSchedule, UserRole
@@ -220,6 +222,36 @@ def _schedule_camera_if_possible(camera):
         pass
 
 
+def _delete_image_files(images):
+    media_root = Path(settings.MEDIA_ROOT).resolve()
+    deleted_files = 0
+
+    for image in images:
+        for relative_path in (image.file_path, image.thumbnail_path):
+            if not relative_path:
+                continue
+
+            file_path = (media_root / relative_path).resolve()
+            try:
+                file_path.relative_to(media_root)
+            except ValueError:
+                continue
+
+            if file_path.exists() and file_path.is_file():
+                file_path.unlink()
+                deleted_files += 1
+
+                parent = file_path.parent
+                while parent != media_root:
+                    try:
+                        parent.rmdir()
+                    except OSError:
+                        break
+                    parent = parent.parent
+
+    return deleted_files
+
+
 class CompanyViewSet(viewsets.ModelViewSet):
     """企業管理API"""
     queryset = Company.objects.all()
@@ -283,6 +315,26 @@ class CompanyViewSet(viewsets.ModelViewSet):
                 'status': _status_label(company.is_active),
             },
         }, status=status.HTTP_201_CREATED)
+
+    def destroy(self, request, *args, **kwargs):
+        """企業削除API"""
+        user_role = _user_role(request.user)
+        if not user_role or user_role.role != 'system_admin':
+            return _forbidden()
+
+        company = self.get_object()
+        images = list(Image.objects.filter(camera__site__company=company))
+        deleted_files = _delete_image_files(images)
+        company.delete()
+
+        return Response({
+            'success': True,
+            'message': '企業を削除しました',
+            'data': {
+                'deleted_images': len(images),
+                'deleted_files': deleted_files,
+            },
+        })
 
 
 class SiteViewSet(viewsets.ModelViewSet):
@@ -369,6 +421,29 @@ class SiteViewSet(viewsets.ModelViewSet):
                 'status': _status_label(site_obj.is_active),
             },
         }, status=status.HTTP_201_CREATED)
+
+    def destroy(self, request, *args, **kwargs):
+        """現場削除API"""
+        user_role = _user_role(request.user)
+        if not user_role or user_role.role not in ('system_admin', 'company_admin'):
+            return _forbidden()
+
+        site_obj = self.get_object()
+        if user_role.role == 'company_admin' and site_obj.company_id != user_role.company_id:
+            return _forbidden('所属企業以外の現場は削除できません')
+
+        images = list(Image.objects.filter(camera__site=site_obj))
+        deleted_files = _delete_image_files(images)
+        site_obj.delete()
+
+        return Response({
+            'success': True,
+            'message': '現場を削除しました',
+            'data': {
+                'deleted_images': len(images),
+                'deleted_files': deleted_files,
+            },
+        })
 
 
 class CameraViewSet(viewsets.ModelViewSet):
@@ -675,6 +750,42 @@ class ImageViewSet(viewsets.ReadOnlyModelViewSet):
         except UserRole.DoesNotExist:
             return Image.objects.none()
 
+    def _media_url(self, request, path):
+        if not path:
+            return None
+        return request.build_absolute_uri(f'{settings.MEDIA_URL}{path}')
+
+    def _image_item(self, request, image):
+        return {
+            'image_id': str(image.id),
+            'camera_id': str(image.camera_id),
+            'camera_name': image.camera.name,
+            'captured_at': image.captured_at,
+            'thumbnail_url': self._media_url(request, image.thumbnail_path or image.file_path),
+            'image_url': self._media_url(request, image.file_path),
+            'image_quality': _image_quality_from_save_quality(image.camera.save_quality),
+            'width': image.width or None,
+            'height': image.height or None,
+            'file_size_bytes': image.file_size or None,
+        }
+
+    def _scoped_camera(self, camera_id):
+        try:
+            camera = Camera.objects.select_related('site', 'site__company').get(id=camera_id)
+        except (Camera.DoesNotExist, ValueError):
+            return None
+
+        user_role = _user_role(self.request.user)
+        if not user_role:
+            return None
+        if user_role.role == 'system_admin':
+            return camera
+        if user_role.role == 'company_admin' and user_role.company_id == camera.site.company_id:
+            return camera
+        if user_role.role in ('site_admin', 'general_user') and user_role.site_id == camera.site_id:
+            return camera
+        return None
+
     @action(detail=False, methods=['get'])
     def by_date_range(self, request):
         """日付範囲で画像取得"""
@@ -699,6 +810,53 @@ class ImageViewSet(viewsets.ReadOnlyModelViewSet):
         except Camera.DoesNotExist:
             return Response({'error': 'Camera not found'}, status=status.HTTP_404_NOT_FOUND)
 
+    @action(detail=False, methods=['get'], url_path='thumbnails')
+    def thumbnails(self, request):
+        """指定カメラ、指定日付のサムネイル一覧"""
+        camera_id = request.query_params.get('camera_id')
+        date = request.query_params.get('date')
+
+        if not camera_id:
+            return _validation_error('入力内容に誤りがあります', {
+                'camera_id': ['カメラIDを指定してください'],
+            })
+        if not date:
+            return _validation_error('入力内容に誤りがあります', {
+                'date': ['日付を指定してください'],
+            })
+
+        camera = self._scoped_camera(camera_id)
+        if not camera:
+            return Response({
+                'success': False,
+                'code': 'IMAGE_NOT_FOUND',
+                'message': 'カメラまたは画像が見つかりません',
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        images = self.get_queryset().filter(camera=camera, captured_at__date=date)
+        if request.query_params.get('sort') == 'captured_at_asc':
+            images = images.order_by('captured_at')
+        else:
+            images = images.order_by('-captured_at')
+
+        return Response({
+            'success': True,
+            'data': {
+                'camera': {
+                    'camera_id': str(camera.id),
+                    'camera_name': camera.name,
+                },
+                'date': date,
+                'images': [self._image_item(request, image) for image in images],
+                'pagination': {
+                    'page': 1,
+                    'page_size': len(images),
+                    'total_count': len(images),
+                    'total_pages': 1,
+                },
+            },
+        })
+
     @action(detail=False, methods=['get'])
     def dates_with_images(self, request):
         """画像が存在する日付一覧"""
@@ -722,6 +880,44 @@ class ImageViewSet(viewsets.ReadOnlyModelViewSet):
             return Response(dates)
         except Camera.DoesNotExist:
             return Response({'error': 'Camera not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(detail=False, methods=['get'], url_path='available-dates')
+    def available_dates(self, request):
+        """フロント画面向けの画像存在日付一覧"""
+        camera_id = request.query_params.get('camera_id')
+        if not camera_id:
+            return _validation_error('入力内容に誤りがあります', {
+                'camera_id': ['カメラIDを指定してください'],
+            })
+
+        camera = self._scoped_camera(camera_id)
+        if not camera:
+            return Response({
+                'success': False,
+                'code': 'IMAGE_NOT_FOUND',
+                'message': 'カメラまたは画像が見つかりません',
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        grouped = {}
+        for image in self.get_queryset().filter(camera=camera).order_by('-captured_at'):
+            date = timezone.localtime(image.captured_at).date().isoformat()
+            item = grouped.setdefault(date, {
+                'date': date,
+                'image_count': 0,
+                'latest_captured_at': image.captured_at,
+            })
+            item['image_count'] += 1
+            if image.captured_at > item['latest_captured_at']:
+                item['latest_captured_at'] = image.captured_at
+
+        available_dates = list(grouped.values())
+        return Response({
+            'success': True,
+            'data': {
+                'available_dates': available_dates,
+                'default_date': available_dates[0]['date'] if available_dates else '',
+            },
+        })
 
     @action(detail=False, methods=['get', 'post'])
     def latest_images(self, request):
@@ -749,8 +945,8 @@ class ImageViewSet(viewsets.ReadOnlyModelViewSet):
                     'camera_name': camera.name,
                     'latest_status': 'success' if latest else 'no_image',
                     'captured_at': latest.captured_at if latest else None,
-                    'image_url': latest.file_path if latest else None,
-                    'thumbnail_url': latest.thumbnail_path if latest else None,
+                    'image_url': self._media_url(request, latest.file_path) if latest else None,
+                    'thumbnail_url': self._media_url(request, latest.thumbnail_path or latest.file_path) if latest else None,
                 })
             
             if request.method == 'POST':
@@ -768,6 +964,11 @@ class ImageViewSet(viewsets.ReadOnlyModelViewSet):
             })
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['post'], url_path='latest/bulk')
+    def latest_bulk(self, request):
+        """フロント画面向けの複数カメラ最新画像取得API"""
+        return self.latest_images(request)
 
 
 class CameraScheduleViewSet(viewsets.ReadOnlyModelViewSet):
