@@ -194,6 +194,38 @@ class CompanySiteCreateApiTests(APITestCase):
         self.assertEqual(camera.username, 'new_user')
         self.assertEqual(camera.save_days, 60)
 
+    def test_update_camera_keeps_existing_password_when_blank(self):
+        self.client.force_authenticate(user=self.system_admin)
+        camera = Camera.objects.create(
+            site=self.site,
+            code='camera_000001',
+            name='更新前カメラ',
+            url='http://example.com/old.jpg',
+            username='old_user',
+            password='old_password',
+        )
+
+        response = self.client.put(
+            reverse('camera-detail', args=[camera.id]),
+            {
+                'site_id': str(self.site.id),
+                'camera_name': '更新後カメラ',
+                'address': 'http://example.com/new.jpg',
+                'auth_method': 'basic',
+                'login_id': 'new_user',
+                'password': '',
+                'capture_interval_minutes': 10,
+                'image_quality': 'FullHD',
+                'retention_days': 60,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        camera.refresh_from_db()
+        self.assertEqual(camera.password, 'old_password')
+        self.assertEqual(camera.username, 'new_user')
+
     @patch('core.views.test_camera_connection')
     def test_connection_test_accepts_input_payload(self, test_connection):
         test_connection.return_value = {

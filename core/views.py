@@ -585,7 +585,7 @@ class CameraViewSet(viewsets.ModelViewSet):
         if error_response:
             return error_response
 
-        payload, error_response = _validate_camera_payload(request.data, require_password=True)
+        payload, error_response = _validate_camera_payload(request.data, require_password=False)
         if error_response:
             return error_response
 
@@ -599,7 +599,8 @@ class CameraViewSet(viewsets.ModelViewSet):
         camera.name = payload['camera_name']
         camera.url = payload['address']
         camera.username = payload['login_id']
-        camera.password = payload['password']
+        if payload['password']:
+            camera.password = payload['password']
         camera.capture_interval_minutes = payload['capture_interval_minutes']
         camera.save_quality = IMAGE_QUALITY_TO_SAVE_QUALITY[payload['image_quality']]
         camera.save_days = payload['retention_days']

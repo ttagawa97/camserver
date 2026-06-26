@@ -391,6 +391,7 @@ SCR_COMPANY_SELECT:
       - "検索・絞り込み欄"
       - "選択ボタン"
       - "企業追加ボタン"
+      - "企業削除ボタン"
 
   display_items:
     company_list:
@@ -429,11 +430,30 @@ SCR_COMPANY_SELECT:
       trigger: "企業追加ボタン押下"
       transition_to: "SCR_COMPANY_FORM"
 
+    delete_company:
+      label: "企業削除"
+      trigger: "企業削除ボタン押下"
+      api: "DELETE /api/v1/companies/{company_id}/"
+      confirmation:
+        required: true
+        message: "選択した企業を削除します。配下の現場、カメラ、撮影済みデータもすべて削除されます。よろしいですか？"
+        buttons:
+          - "削除"
+          - "キャンセル"
+      result:
+        success_message: "企業を削除しました"
+        failure_message: "企業の削除に失敗しました"
+      side_effects:
+        - "対象企業配下の現場を削除する"
+        - "対象企業配下のカメラを削除する"
+        - "対象企業配下の撮影済み画像メタデータ、画像ファイル、サムネイルを削除する"
+
   empty_state:
     message: "表示可能な企業がありません"
 
   notes:
     - "企業追加は企業名のみ入力する"
+    - "企業削除時は撮影済みデータも削除対象とし、確認ダイアログに明記する"
     - "企業コード等の保存用識別子はサーバー側で採番または生成する"
 
 
@@ -525,6 +545,7 @@ SCR_SITE_SELECT:
       - "検索・絞り込み欄"
       - "選択ボタン"
       - "現場追加ボタン"
+      - "現場削除ボタン"
       - "戻るボタン"
 
   display_items:
@@ -564,6 +585,23 @@ SCR_SITE_SELECT:
       trigger: "現場追加ボタン押下"
       transition_to: "SCR_SITE_FORM"
 
+    delete_site:
+      label: "現場削除"
+      trigger: "現場削除ボタン押下"
+      api: "DELETE /api/v1/sites/{site_id}/"
+      confirmation:
+        required: true
+        message: "選択した現場を削除します。配下のカメラ、撮影済みデータもすべて削除されます。よろしいですか？"
+        buttons:
+          - "削除"
+          - "キャンセル"
+      result:
+        success_message: "現場を削除しました"
+        failure_message: "現場の削除に失敗しました"
+      side_effects:
+        - "対象現場配下のカメラを削除する"
+        - "対象現場配下の撮影済み画像メタデータ、画像ファイル、サムネイルを削除する"
+
     back:
       label: "戻る"
       visible_roles:
@@ -575,6 +613,7 @@ SCR_SITE_SELECT:
 
   notes:
     - "現場追加は所属企業と現場名のみ入力する"
+    - "現場削除時は撮影済みデータも削除対象とし、確認ダイアログに明記する"
     - "system_adminは企業選択画面で選択中の企業を初期値とする"
     - "company_adminはログインユーザーの所属企業を固定値とする"
 
@@ -973,6 +1012,7 @@ SCR_CAMERA_SETTING:
         format: "{value}分"
       - key: "image_quality"
         label: "保存画質"
+        format: "{quality_label}（{width}×{height}px）"
       - key: "retention_days"
         label: "保存期間"
         format: "{value}日"
@@ -1010,14 +1050,15 @@ SCR_CAMERA_SETTING:
       confirmation:
         required: true
         title: "カメラ削除確認"
-        message: "選択したカメラを削除します。よろしいですか？"
+        message: "選択したカメラを削除します。撮影済みデータも削除されます。よろしいですか？"
         buttons:
           - "削除"
           - "キャンセル"
       result:
         success_message: "カメラを削除しました"
         failure_message: "カメラの削除に失敗しました"
-      note: "保存済み画像を削除するかは未決"
+      side_effects:
+        - "対象カメラの撮影済み画像メタデータ、画像ファイル、サムネイルを削除する"
 
     connection_test:
       label: "接続テスト"
@@ -1040,7 +1081,7 @@ SCR_CAMERA_SETTING:
 
   notes:
     - "一般ユーザーはこの画面へ遷移不可"
-    - "カメラ削除方式は02_data_spec.yamlの未決事項に従う"
+    - "カメラ削除時は撮影済みデータも削除対象とし、確認ダイアログに明記する"
     - "接続テストは入力中フォームからも実行可能とする"
 
 
@@ -1130,17 +1171,20 @@ SCR_CAMERA_FORM:
     password:
       label: "パスワード"
       input_type: "password"
-      required: true
+      required_condition: "追加時は必須。再設定時は任意"
       max_length: 1024
-      placeholder: "カメラ接続用パスワード"
-      update_rule: "入力値で上書き"
-      note: "再設定時は入力されたパスワードで既存パスワードを上書きする"
+      placeholder:
+        add_mode: "カメラ接続用パスワード"
+        edit_mode: "変更する場合のみ入力"
+      update_rule: "再設定時は入力された場合のみ既存パスワードを上書きし、空欄の場合は変更しない"
+      note: "既存パスワードは画面表示しない"
 
     capture_interval_minutes:
       label: "取得間隔"
       input_type: "number"
       required: true
       unit: "分"
+      unit_display: "入力欄の右側に「分」を表示する"
       min: 1
       placeholder: "1"
       description: "静止画取得間隔。最短1分"
@@ -1151,17 +1195,29 @@ SCR_CAMERA_FORM:
       required: true
       allowed_values:
         - value: "VGA"
-          label: "VGA"
+          label: "VGA (640×480px)"
+          width: 640
+          height: 480
         - value: "SVGA"
-          label: "SVGA"
+          label: "SVGA (800×600px)"
+          width: 800
+          height: 600
         - value: "WXGA"
-          label: "WXGA"
+          label: "WXGA (1280×800px)"
+          width: 1280
+          height: 800
         - value: "HD"
-          label: "HD"
+          label: "HD (1280×720px)"
+          width: 1280
+          height: 720
         - value: "FullHD"
-          label: "FullHD"
+          label: "FullHD (1920×1080px)"
+          width: 1920
+          height: 1080
         - value: "4K"
-          label: "4K"
+          label: "4K (3840×2160px)"
+          width: 3840
+          height: 2160
       description: "サーバー側で指定画質へ変換して保存する"
 
     retention_days:
@@ -1169,6 +1225,7 @@ SCR_CAMERA_FORM:
       input_type: "number"
       required: true
       unit: "日"
+      unit_display: "入力欄の右側に「日」を表示する"
       min: 1
       placeholder: "30"
       description: "画像ファイルを保存する期間"
@@ -1182,7 +1239,8 @@ SCR_CAMERA_FORM:
         - "アドレス必須"
         - "認証方式必須"
         - "ID必須"
-        - "パスワード必須"
+        - "追加時はパスワード必須"
+        - "再設定時はパスワード空欄の場合、登録済みパスワードで接続テストする"
       success:
         message: "接続テストに成功しました"
         optional_display:
@@ -1204,7 +1262,8 @@ SCR_CAMERA_FORM:
         - "アドレス必須"
         - "認証方式必須"
         - "ID必須"
-        - "パスワード必須"
+        - "追加時はパスワード必須"
+        - "再設定時はパスワード空欄を許可し、空欄の場合は既存パスワードを変更しない"
         - "取得間隔は1分以上"
         - "保存画質必須"
         - "保存期間は1日以上"
@@ -1230,8 +1289,9 @@ SCR_CAMERA_FORM:
 
     edit_mode:
       display_value: ""
-      required: true
-      update_method: "入力値で上書き"
+      required: false
+      update_method: "入力値がある場合のみ上書き。空欄の場合は変更しない"
+      placeholder: "変更する場合のみ入力"
       note: "既存パスワードは画面表示しない"
 
   connection_test_requirement_before_save:
@@ -1244,6 +1304,9 @@ SCR_CAMERA_FORM:
   notes:
     - "カメラ登録と再設定は同一フォームとする"
     - "保存画質はサーバー側変換であり、カメラ側の解像度設定ではない"
+    - "保存画質の選択肢と一覧表示には画質名だけでなく縦横Pixel数も表示する"
+    - "取得間隔入力には単位「分」、保存期間入力には単位「日」を表示する"
+    - "再設定時のパスワード空欄は既存パスワード維持を意味する"
     - "接続テストは保存前に実施できるが、必須にするかは未決"
 
 
@@ -1568,9 +1631,9 @@ layout_examples:
       ├────────────────────────────────────────────────────────────┤
       │ [＋ カメラ追加]                                             │
       │                                                            │
-      │ カメラ名 | アドレス | 認証方式 | 取得間隔 | 保存画質 | 操作  │
-      │ Camera001 | http://... | BASIC | 1分 | FullHD | 編集 削除 接続 │
-      │ Camera002 | http://... | BASIC | 5分 | VGA    | 編集 削除 接続 │
+      │ カメラ名 | アドレス | 認証方式 | 取得間隔 | 保存画質          | 操作 │
+      │ Camera001 | http://... | BASIC | 1分 | FullHD(1920×1080px) | 編集 削除 接続 │
+      │ Camera002 | http://... | BASIC | 5分 | VGA(640×480px)      | 編集 削除 接続 │
       └────────────────────────────────────────────────────────────┘
 
   camera_form_screen:
@@ -1583,9 +1646,9 @@ layout_examples:
       │ アドレス      [             ] │
       │ 認証方式      [BASIC認証 ▼  ] │
       │ ID            [             ] │
-      │ パスワード    [********     ] │
+      │ パスワード    [変更する場合のみ入力] │
       │ 取得間隔      [1] 分          │
-      │ 保存画質      [FullHD ▼     ] │
+      │ 保存画質      [FullHD (1920×1080px) ▼] │
       │ 保存期間      [30] 日         │
       │                              │
       │ [接続テスト] [保存] [キャンセル] │
@@ -1628,7 +1691,10 @@ confirmed_items:
   - "カメラ登録と再設定は共通フォームとする"
   - "カメラ削除は可能"
   - "接続テストは可能"
-  - "パスワード変更は入力値で上書きする"
+  - "カメラ再設定時のパスワード変更は、入力された場合のみ上書きし、空欄の場合は変更しない"
+  - "取得間隔入力には単位「分」を表示する"
+  - "保存期間入力には単位「日」を表示する"
+  - "保存画質には画質名と縦横Pixel数を表示する"
   - "保存画質はサーバー側で変換する前提で選択する"
   - "左側カメラメニューのチェックボックスで複数カメラを選択できる"
   - "まとめて参照ボタンで複数カメラ最新画像まとめ表示画面へ遷移する"
@@ -1636,6 +1702,8 @@ confirmed_items:
   - "画面はカメラへ直接接続せず、サーバー保存済み画像を参照する"
   - "企業追加画面では企業名のみ入力する"
   - "現場追加画面では所属企業と現場名のみ入力する"
+  - "企業削除、現場削除は可能"
+  - "企業削除、現場削除、カメラ削除では撮影済みデータも削除し、確認ダイアログに明記する"
 
 
 # ==============================================================================
@@ -1702,15 +1770,6 @@ pending_items:
       - "任意にする"
     recommendation: "任意にする"
 
-  - id: "U008"
-    title: "カメラ削除時の確認内容"
-    description: "カメラ削除時に保存済み画像の削除有無を選択させるか未決"
-    candidate_options:
-      - "カメラ設定のみ削除"
-      - "保存済み画像も削除"
-      - "削除時に選択"
-    recommendation: "カメラ設定のみ削除"
-
   - id: "U009"
     title: "カレンダーの日付判定単位"
     description: "画像存在日付を選択中カメラ単位で判定するか、現場全体で判定するか未決"
@@ -1739,9 +1798,9 @@ pending_items:
     recommendation: "実装する"
 
   - id: "U012"
-    title: "企業・現場編集・削除画面"
-    description: "企業編集、企業削除、現場編集、現場削除画面の詳細は未定義。企業追加、現場追加は本仕様で定義済み"
+    title: "企業・現場編集画面"
+    description: "企業編集、現場編集画面の詳細は未定義。企業追加、企業削除、現場追加、現場削除は本仕様で定義済み"
     candidate_options:
-      - "追加のみ本システムに含める"
-      - "編集・削除も本システムに含める"
+      - "追加・削除のみ本システムに含める"
+      - "編集も本システムに含める"
       - "後続バージョンで追加"
