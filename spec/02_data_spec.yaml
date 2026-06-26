@@ -149,6 +149,8 @@ company:
       unique: true
       description: "フォルダパスや外部参照に使用する企業コード"
       example: "company_000001"
+      input_on_create: false
+      generation_rule: "企業追加時にサーバー側で採番または生成する"
 
     company_name:
       type: "string"
@@ -208,6 +210,8 @@ site:
       unique_in_company: true
       description: "フォルダパスや外部参照に使用する現場コード"
       example: "site_000001"
+      input_on_create: false
+      generation_rule: "現場追加時にサーバー側で採番または生成する"
 
     site_name:
       type: "string"
@@ -1629,4 +1633,3 @@ pending_items:
       - "取得元形式を維持"
       - "保存画質変換後はJPEGに統一"
     recommendation: "JPEG固定"
-

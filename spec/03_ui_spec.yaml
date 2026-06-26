@@ -92,8 +92,14 @@ screens:
   - screen_id: "SCR_COMPANY_SELECT"
     name: "企業選択画面"
 
+  - screen_id: "SCR_COMPANY_FORM"
+    name: "企業追加画面"
+
   - screen_id: "SCR_SITE_SELECT"
     name: "現場選択画面"
+
+  - screen_id: "SCR_SITE_FORM"
+    name: "現場追加画面"
 
   - screen_id: "SCR_CAMERA_THUMBNAIL"
     name: "カメラリスト・静止画サムネイル画面"
@@ -198,9 +204,39 @@ screen_transitions:
     allowed_roles:
       - "system_admin"
 
+  open_company_add_form:
+    from: "SCR_COMPANY_SELECT"
+    to: "SCR_COMPANY_FORM"
+    trigger: "企業追加ボタン押下"
+    allowed_roles:
+      - "system_admin"
+
+  company_created:
+    from: "SCR_COMPANY_FORM"
+    to: "SCR_COMPANY_SELECT"
+    trigger: "保存成功"
+    allowed_roles:
+      - "system_admin"
+
   site_selected:
     from: "SCR_SITE_SELECT"
     to: "SCR_CAMERA_THUMBNAIL"
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+
+  open_site_add_form:
+    from: "SCR_SITE_SELECT"
+    to: "SCR_SITE_FORM"
+    trigger: "現場追加ボタン押下"
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+
+  site_created:
+    from: "SCR_SITE_FORM"
+    to: "SCR_SITE_SELECT"
+    trigger: "保存成功"
     allowed_roles:
       - "system_admin"
       - "company_admin"
@@ -337,6 +373,7 @@ SCR_COMPANY_SELECT:
       - "企業一覧"
       - "検索・絞り込み欄"
       - "選択ボタン"
+      - "企業追加ボタン"
 
   display_items:
     company_list:
@@ -370,12 +407,70 @@ SCR_COMPANY_SELECT:
       trigger: "検索条件入力"
       behavior: "企業名で絞り込み"
 
+    open_company_add:
+      label: "企業追加"
+      trigger: "企業追加ボタン押下"
+      transition_to: "SCR_COMPANY_FORM"
+
   empty_state:
     message: "表示可能な企業がありません"
 
   notes:
-    - "企業の追加・変更・削除画面はVer0.8では未定義"
-    - "企業マスタ管理を追加する場合は別画面として定義予定"
+    - "企業追加は企業名のみ入力する"
+    - "企業コード等の保存用識別子はサーバー側で採番または生成する"
+
+
+# ==============================================================================
+# SCR_COMPANY_FORM: 企業追加画面
+# ==============================================================================
+SCR_COMPANY_FORM:
+  name: "企業追加画面"
+  purpose: "システム管理者が新規企業を登録する"
+
+  access:
+    allowed_roles:
+      - "system_admin"
+    denied_roles:
+      - "company_admin"
+      - "site_admin"
+      - "general_user"
+
+  layout:
+    type: "single_form"
+    components:
+      - "ヘッダー"
+      - "パンくず"
+      - "企業名入力欄"
+      - "保存ボタン"
+      - "キャンセルボタン"
+
+  form_fields:
+    company_name:
+      label: "企業名"
+      input_type: "text"
+      required: true
+      max_length: 255
+      placeholder: "企業名を入力"
+
+  actions:
+    save:
+      label: "保存"
+      trigger: "保存ボタン押下"
+      api: "POST /api/v1/companies/"
+      validation:
+        - "企業名必須"
+      success:
+        message: "企業を登録しました"
+        transition_to: "SCR_COMPANY_SELECT"
+
+    cancel:
+      label: "キャンセル"
+      trigger: "キャンセルボタン押下"
+      transition_to: "SCR_COMPANY_SELECT"
+
+  notes:
+    - "企業追加画面では企業名のみ入力する"
+    - "企業ID、企業コード、状態、作成日時、更新日時はサーバー側で設定する"
 
 
 # ==============================================================================
@@ -412,6 +507,7 @@ SCR_SITE_SELECT:
       - "現場一覧"
       - "検索・絞り込み欄"
       - "選択ボタン"
+      - "現場追加ボタン"
       - "戻るボタン"
 
   display_items:
@@ -446,6 +542,11 @@ SCR_SITE_SELECT:
       trigger: "検索条件入力"
       behavior: "現場名で絞り込み"
 
+    open_site_add:
+      label: "現場追加"
+      trigger: "現場追加ボタン押下"
+      transition_to: "SCR_SITE_FORM"
+
     back:
       label: "戻る"
       visible_roles:
@@ -456,8 +557,83 @@ SCR_SITE_SELECT:
     message: "表示可能な現場がありません"
 
   notes:
-    - "現場の追加・変更・削除画面はVer0.8では未定義"
-    - "企業管理者に現場管理を許可するかは全体仕様側の未決事項に従う"
+    - "現場追加は所属企業と現場名のみ入力する"
+    - "system_adminは企業選択画面で選択中の企業を初期値とする"
+    - "company_adminはログインユーザーの所属企業を固定値とする"
+
+
+# ==============================================================================
+# SCR_SITE_FORM: 現場追加画面
+# ==============================================================================
+SCR_SITE_FORM:
+  name: "現場追加画面"
+  purpose: "システム管理者または企業管理者が新規現場を登録する"
+
+  access:
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+    denied_roles:
+      - "site_admin"
+      - "general_user"
+
+  context:
+    system_admin:
+      required_context:
+        - "selected_company_id"
+      description: "企業選択画面で選択された企業を所属企業の初期値とする"
+
+    company_admin:
+      required_context:
+        - "user.company_id"
+      description: "ログインユーザーの所属企業を所属企業として固定する"
+
+  layout:
+    type: "single_form"
+    components:
+      - "ヘッダー"
+      - "パンくず"
+      - "所属企業表示"
+      - "現場名入力欄"
+      - "保存ボタン"
+      - "キャンセルボタン"
+
+  form_fields:
+    company_id:
+      label: "所属企業"
+      input_type: "select_or_readonly"
+      required: true
+      behavior:
+        system_admin: "選択中企業を初期値として表示。必要に応じて企業一覧から選択可能"
+        company_admin: "所属企業を読み取り専用表示"
+
+    site_name:
+      label: "現場名"
+      input_type: "text"
+      required: true
+      max_length: 255
+      placeholder: "現場名を入力"
+
+  actions:
+    save:
+      label: "保存"
+      trigger: "保存ボタン押下"
+      api: "POST /api/v1/sites/"
+      validation:
+        - "所属企業必須"
+        - "現場名必須"
+      success:
+        message: "現場を登録しました"
+        transition_to: "SCR_SITE_SELECT"
+
+    cancel:
+      label: "キャンセル"
+      trigger: "キャンセルボタン押下"
+      transition_to: "SCR_SITE_SELECT"
+
+  notes:
+    - "現場追加画面では所属企業と現場名のみ入力する"
+    - "現場ID、現場コード、状態、作成日時、更新日時はサーバー側で設定する"
 
 
 # ==============================================================================
@@ -1437,6 +1613,8 @@ confirmed_items:
   - "まとめて参照ボタンで複数カメラ最新画像まとめ表示画面へ遷移する"
   - "複数カメラ最新画像まとめ表示画面では最新画像を常に表示する"
   - "画面はカメラへ直接接続せず、サーバー保存済み画像を参照する"
+  - "企業追加画面では企業名のみ入力する"
+  - "現場追加画面では所属企業と現場名のみ入力する"
 
 
 # ==============================================================================
@@ -1540,9 +1718,9 @@ pending_items:
     recommendation: "実装する"
 
   - id: "U012"
-    title: "企業・現場管理画面"
-    description: "企業追加、現場追加削除画面の詳細は未定義"
+    title: "企業・現場編集・削除画面"
+    description: "企業編集、企業削除、現場編集、現場削除画面の詳細は未定義。企業追加、現場追加は本仕様で定義済み"
     candidate_options:
-      - "本システムに含める"
-      - "管理者が別途DB登録する"
+      - "追加のみ本システムに含める"
+      - "編集・削除も本システムに含める"
       - "後続バージョンで追加"

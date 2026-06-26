@@ -64,6 +64,10 @@ api_policy:
   api_style: "REST"
   request_format: "JSON"
   response_format: "JSON"
+  routing_convention:
+    framework: "Django REST Framework DefaultRouter"
+    trailing_slash_required: true
+    note: "Router配下のエンドポイントは末尾スラッシュ付きで定義する。POST/PUT/PATCH/DELETEで末尾スラッシュを省略するとAPPEND_SLASHによりリクエスト本文を保持したリダイレクトができないため、DjangoのHTMLエラーが返る場合がある"
   image_response_format:
     metadata: "JSON"
     image_binary: "image/jpeg or static file response"
@@ -80,11 +84,11 @@ api_policy:
 
   authentication:
     required_by_default: true
-    method: "未決"
+    method: "Django SessionAuthentication"
     candidate_options:
       - "Session認証"
       - "JWT Bearer Token"
-    recommendation: "JWT Bearer Token"
+    recommendation: "現行実装はSession認証。JWTを採用する場合はレスポンス、ヘッダー、ログアウト仕様を同時に更新する"
 
   authorization:
     method: "Role Based Access Control"
@@ -114,8 +118,8 @@ common_headers:
 
     Authorization:
       value: "Bearer {access_token}"
-      required: true
-      note: "認証方式がJWTの場合。Session認証を採用する場合は未使用"
+      required: false
+      note: "JWT Bearer Token採用時のみ使用。現行のSession認証では未使用"
 
     X-Request-Id:
       value: "{request_id}"
@@ -282,32 +286,32 @@ error_codes:
 # ==============================================================================
 api_list:
   authentication:
-    - "POST /api/v1/auth/login"
-    - "POST /api/v1/auth/logout"
-    - "GET  /api/v1/auth/me"
+    - "POST /api/v1/auth/login/"
+    - "POST /api/v1/auth/logout/"
+    - "GET  /api/v1/auth/me/"
 
   company:
-    - "GET /api/v1/companies"
+    - "GET /api/v1/companies/"
+    - "POST /api/v1/companies/"
 
   site:
-    - "GET /api/v1/sites"
+    - "GET /api/v1/sites/"
+    - "POST /api/v1/sites/"
 
   camera:
-    - "GET    /api/v1/cameras"
-    - "GET    /api/v1/cameras/{camera_id}"
-    - "POST   /api/v1/cameras"
-    - "PUT    /api/v1/cameras/{camera_id}"
-    - "DELETE /api/v1/cameras/{camera_id}"
-    - "POST   /api/v1/cameras/test-connection"
-    - "POST   /api/v1/cameras/{camera_id}/test-connection"
+    - "GET    /api/v1/cameras/"
+    - "GET    /api/v1/cameras/{camera_id}/"
+    - "POST   /api/v1/cameras/"
+    - "PUT    /api/v1/cameras/{camera_id}/"
+    - "DELETE /api/v1/cameras/{camera_id}/"
+    - "POST   /api/v1/cameras/{camera_id}/test_connection/"
 
   image:
-    - "GET /api/v1/images/available-dates"
-    - "GET /api/v1/images/thumbnails"
-    - "GET /api/v1/images/{image_id}"
-    - "GET /api/v1/images/{image_id}/binary"
-    - "GET /api/v1/images/latest"
-    - "POST /api/v1/images/latest/bulk"
+    - "GET /api/v1/images/"
+    - "GET /api/v1/images/by_date_range/"
+    - "GET /api/v1/images/dates_with_images/"
+    - "GET /api/v1/images/latest_images/"
+    - "GET /api/v1/images/{image_id}/"
 
   health:
     - "GET /api/v1/health"
@@ -321,20 +325,23 @@ authentication_apis:
     api_id: "API_AUTH_001"
     name: "ログインAPI"
     method: "POST"
-    path: "/api/v1/auth/login"
+    path: "/api/v1/auth/login/"
     authentication_required: false
-    description: "ログインID、パスワードを検証し、認証情報とログインユーザー情報を返却する"
+    description: "ユーザー名、パスワードを検証し、ログインユーザー情報を返却する"
+    notes:
+      - "Django REST Framework DefaultRouter で提供するため、末尾スラッシュを必須とする"
+      - "現行実装は Django SessionAuthentication を前提としており、ログインレスポンスで access_token は返却しない"
 
     request:
       body:
-        login_id:
+        username:
           type: "string"
           required: true
           example: "admin"
         password:
           type: "string"
           required: true
-          example: "password"
+          example: "admin123"
 
     response:
       success_status: 200
@@ -342,47 +349,80 @@ authentication_apis:
         success:
           type: "boolean"
           example: true
-        data:
+        user:
           type: "object"
           fields:
-            access_token:
+            id:
+              type: "integer"
+              example: 1
+            username:
               type: "string"
-              required: "認証方式がJWTの場合"
-            refresh_token:
+              example: "admin"
+            email:
               type: "string"
-              required: false
-            user:
+              example: "admin@example.com"
+            first_name:
+              type: "string"
+            last_name:
+              type: "string"
+            role:
               type: "object"
+              nullable: true
               fields:
-                user_id:
+                id:
                   type: "string"
-                login_id:
+                  format: "uuid"
+                user:
+                  type: "integer"
+                username:
                   type: "string"
-                user_name:
+                email:
                   type: "string"
                 role:
                   type: "string"
-                company_id:
+                  allowed_values:
+                    - "system_admin"
+                    - "company_admin"
+                    - "site_admin"
+                    - "general_user"
+                company:
                   type: "string"
+                  format: "uuid"
                   nullable: true
-                site_id:
+                site:
                   type: "string"
+                  format: "uuid"
                   nullable: true
-                initial_screen:
+                created_at:
                   type: "string"
-                  example: "SCR_COMPANY_SELECT"
+                  format: "date-time"
+                updated_at:
+                  type: "string"
+                  format: "date-time"
+            is_active:
+              type: "boolean"
 
     errors:
       - status: 400
         code: "VALIDATION_ERROR"
+        body:
+          success: false
+          message:
+            type: "string"
+            example: "ユーザー名とパスワードを入力してください"
       - status: 401
         code: "INVALID_CREDENTIALS"
+        body:
+          success: false
+          message:
+            type: "string"
+            example: "パスワードが間違っています"
 
   logout:
     api_id: "API_AUTH_002"
     name: "ログアウトAPI"
     method: "POST"
-    path: "/api/v1/auth/logout"
+    path: "/api/v1/auth/logout/"
     authentication_required: true
     description: "ログアウト処理を行う"
 
@@ -397,55 +437,65 @@ authentication_apis:
           example: true
         message:
           type: "string"
-          example: "ログアウトしました"
+          example: "ログアウト成功"
 
   me:
     api_id: "API_AUTH_003"
     name: "ログインユーザー情報取得API"
     method: "GET"
-    path: "/api/v1/auth/me"
+    path: "/api/v1/auth/me/"
     authentication_required: true
     description: "現在ログイン中のユーザー情報と権限範囲を取得する"
 
     response:
       success_status: 200
       body:
-        success:
-          type: "boolean"
-        data:
+        id:
+          type: "integer"
+        username:
+          type: "string"
+        email:
+          type: "string"
+        first_name:
+          type: "string"
+        last_name:
+          type: "string"
+        role:
           type: "object"
+          nullable: true
           fields:
-            user_id:
+            id:
               type: "string"
-            login_id:
+              format: "uuid"
+            user:
+              type: "integer"
+            username:
               type: "string"
-            user_name:
+            email:
               type: "string"
             role:
               type: "string"
-            company_id:
+              allowed_values:
+                - "system_admin"
+                - "company_admin"
+                - "site_admin"
+                - "general_user"
+            company:
               type: "string"
+              format: "uuid"
               nullable: true
-            site_id:
+            site:
               type: "string"
+              format: "uuid"
               nullable: true
-            permissions:
-              type: "object"
-              fields:
-                view_images:
-                  type: "boolean"
-                view_latest_multi_camera:
-                  type: "boolean"
-                manage_cameras:
-                  type: "boolean"
-                add_camera:
-                  type: "boolean"
-                edit_camera:
-                  type: "boolean"
-                delete_camera:
-                  type: "boolean"
-                connection_test:
-                  type: "boolean"
+            created_at:
+              type: "string"
+              format: "date-time"
+            updated_at:
+              type: "string"
+              format: "date-time"
+        is_active:
+          type: "boolean"
 
 
 # ==============================================================================
@@ -456,7 +506,7 @@ company_apis:
     api_id: "API_COMPANY_001"
     name: "企業一覧取得API"
     method: "GET"
-    path: "/api/v1/companies"
+    path: "/api/v1/companies/"
     authentication_required: true
     allowed_roles:
       - "system_admin"
@@ -514,6 +564,48 @@ company_apis:
       - status: 403
         code: "FORBIDDEN"
 
+  create_company:
+    api_id: "API_COMPANY_002"
+    name: "企業登録API"
+    method: "POST"
+    path: "/api/v1/companies/"
+    authentication_required: true
+    allowed_roles:
+      - "system_admin"
+    description: "新規企業を登録する。クライアントからは企業名のみ送信し、企業ID、企業コード、状態、作成日時、更新日時はサーバー側で設定する"
+
+    request:
+      body:
+        company_name:
+          type: "string"
+          required: true
+          max_length: 255
+          example: "A社"
+
+    response:
+      success_status: 201
+      body:
+        success:
+          type: "boolean"
+          example: true
+        data:
+          type: "object"
+          fields:
+            company_id:
+              type: "string"
+            company_name:
+              type: "string"
+            status:
+              type: "string"
+              example: "active"
+
+    errors:
+      - status: 400
+        code: "VALIDATION_ERROR"
+        description: "企業名未入力、文字数超過、重複など"
+      - status: 403
+        code: "FORBIDDEN"
+
 
 # ==============================================================================
 # 現場API
@@ -523,7 +615,7 @@ site_apis:
     api_id: "API_SITE_001"
     name: "現場一覧取得API"
     method: "GET"
-    path: "/api/v1/sites"
+    path: "/api/v1/sites/"
     authentication_required: true
     allowed_roles:
       - "system_admin"
@@ -598,6 +690,65 @@ site_apis:
       - status: 403
         code: "FORBIDDEN"
 
+  create_site:
+    api_id: "API_SITE_002"
+    name: "現場登録API"
+    method: "POST"
+    path: "/api/v1/sites/"
+    authentication_required: true
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+    description: "新規現場を登録する。クライアントからは所属企業IDと現場名のみ送信し、現場ID、現場コード、状態、作成日時、更新日時はサーバー側で設定する"
+
+    request:
+      body:
+        company_id:
+          type: "string"
+          required: true
+          description: "所属企業ID。company_adminの場合はログインユーザーの所属企業IDと一致している必要がある"
+        site_name:
+          type: "string"
+          required: true
+          max_length: 255
+          example: "札幌第1現場"
+
+    authorization_rule:
+      system_admin:
+        - "任意のcompany_idを指定可能"
+      company_admin:
+        - "自分のcompany_idのみ指定可能"
+      site_admin:
+        - "使用不可"
+      general_user:
+        - "使用不可"
+
+    response:
+      success_status: 201
+      body:
+        success:
+          type: "boolean"
+          example: true
+        data:
+          type: "object"
+          fields:
+            site_id:
+              type: "string"
+            company_id:
+              type: "string"
+            site_name:
+              type: "string"
+            status:
+              type: "string"
+              example: "active"
+
+    errors:
+      - status: 400
+        code: "VALIDATION_ERROR"
+        description: "所属企業未指定、現場名未入力、文字数超過、重複など"
+      - status: 403
+        code: "FORBIDDEN"
+
 
 # ==============================================================================
 # カメラAPI
@@ -607,7 +758,7 @@ camera_apis:
     api_id: "API_CAMERA_001"
     name: "カメラ一覧取得API"
     method: "GET"
-    path: "/api/v1/cameras"
+    path: "/api/v1/cameras/"
     authentication_required: true
     allowed_roles:
       - "system_admin"
@@ -695,7 +846,7 @@ camera_apis:
     api_id: "API_CAMERA_002"
     name: "カメラ詳細取得API"
     method: "GET"
-    path: "/api/v1/cameras/{camera_id}"
+    path: "/api/v1/cameras/{camera_id}/"
     authentication_required: true
     allowed_roles:
       - "system_admin"
@@ -753,7 +904,7 @@ camera_apis:
     api_id: "API_CAMERA_003"
     name: "カメラ登録API"
     method: "POST"
-    path: "/api/v1/cameras"
+    path: "/api/v1/cameras/"
     authentication_required: true
     allowed_roles:
       - "system_admin"
@@ -841,7 +992,7 @@ camera_apis:
     api_id: "API_CAMERA_004"
     name: "カメラ更新API"
     method: "PUT"
-    path: "/api/v1/cameras/{camera_id}"
+    path: "/api/v1/cameras/{camera_id}/"
     authentication_required: true
     allowed_roles:
       - "system_admin"
@@ -913,7 +1064,7 @@ camera_apis:
     api_id: "API_CAMERA_005"
     name: "カメラ削除API"
     method: "DELETE"
-    path: "/api/v1/cameras/{camera_id}"
+    path: "/api/v1/cameras/{camera_id}/"
     authentication_required: true
     allowed_roles:
       - "system_admin"
@@ -951,7 +1102,7 @@ camera_apis:
     api_id: "API_CAMERA_006"
     name: "入力値によるカメラ接続テストAPI"
     method: "POST"
-    path: "/api/v1/cameras/test-connection"
+    path: "/api/v1/cameras/{camera_id}/test_connection/"
     authentication_required: true
     allowed_roles:
       - "system_admin"
@@ -1019,7 +1170,7 @@ camera_apis:
     api_id: "API_CAMERA_007"
     name: "登録済みカメラ接続テストAPI"
     method: "POST"
-    path: "/api/v1/cameras/{camera_id}/test-connection"
+    path: "/api/v1/cameras/{camera_id}/test_connection/"
     authentication_required: true
     allowed_roles:
       - "system_admin"
@@ -1069,7 +1220,7 @@ image_apis:
     api_id: "API_IMAGE_001"
     name: "画像存在日付一覧取得API"
     method: "GET"
-    path: "/api/v1/images/available-dates"
+    path: "/api/v1/images/dates_with_images/"
     authentication_required: true
     allowed_roles:
       - "system_admin"
@@ -1130,7 +1281,7 @@ image_apis:
     api_id: "API_IMAGE_002"
     name: "サムネイル一覧取得API"
     method: "GET"
-    path: "/api/v1/images/thumbnails"
+    path: "/api/v1/images/by_date_range/"
     authentication_required: true
     allowed_roles:
       - "system_admin"
@@ -1211,7 +1362,7 @@ image_apis:
     api_id: "API_IMAGE_003"
     name: "画像メタデータ取得API"
     method: "GET"
-    path: "/api/v1/images/{image_id}"
+    path: "/api/v1/images/{image_id}/"
     authentication_required: true
     allowed_roles:
       - "system_admin"
@@ -1266,7 +1417,7 @@ image_apis:
     api_id: "API_IMAGE_004"
     name: "画像バイナリ取得API"
     method: "GET"
-    path: "/api/v1/images/{image_id}/binary"
+    path: "/api/v1/images/{image_id}/"
     authentication_required: true
     allowed_roles:
       - "system_admin"
@@ -1309,7 +1460,7 @@ image_apis:
     api_id: "API_IMAGE_005"
     name: "単一カメラ最新画像取得API"
     method: "GET"
-    path: "/api/v1/images/latest"
+    path: "/api/v1/images/latest_images/"
     authentication_required: true
     allowed_roles:
       - "system_admin"
@@ -1361,7 +1512,7 @@ image_apis:
     api_id: "API_IMAGE_006"
     name: "複数カメラ最新画像取得API"
     method: "POST"
-    path: "/api/v1/images/latest/bulk"
+    path: "/api/v1/images/latest_images/"
     authentication_required: true
     allowed_roles:
       - "system_admin"
@@ -1516,7 +1667,7 @@ role_based_api_access:
       - "image"
       - "health"
     limited_camera_api_access:
-      - "GET /api/v1/cameras"
+      - "GET /api/v1/cameras/"
     denied_api_groups:
       - "company"
       - "site"
@@ -1633,45 +1784,53 @@ security:
 screen_api_mapping:
   SCR_LOGIN:
     used_apis:
-      - "POST /api/v1/auth/login"
+      - "POST /api/v1/auth/login/"
 
   SCR_COMPANY_SELECT:
     used_apis:
-      - "GET /api/v1/companies"
+      - "GET /api/v1/companies/"
+
+  SCR_COMPANY_FORM:
+    used_apis:
+      - "POST /api/v1/companies/"
 
   SCR_SITE_SELECT:
     used_apis:
-      - "GET /api/v1/sites"
+      - "GET /api/v1/sites/"
+
+  SCR_SITE_FORM:
+    used_apis:
+      - "GET /api/v1/companies/"
+      - "POST /api/v1/sites/"
 
   SCR_CAMERA_THUMBNAIL:
     used_apis:
-      - "GET /api/v1/cameras"
-      - "GET /api/v1/images/available-dates"
-      - "GET /api/v1/images/thumbnails"
-      - "GET /api/v1/images/{image_id}"
+      - "GET /api/v1/cameras/"
+      - "GET /api/v1/images/dates_with_images/"
+      - "GET /api/v1/images/by_date_range/"
+      - "GET /api/v1/images/{image_id}/"
 
   SCR_ORIGINAL_IMAGE_VIEW:
     used_apis:
-      - "GET /api/v1/images/{image_id}"
-      - "GET /api/v1/images/{image_id}/binary"
+      - "GET /api/v1/images/{image_id}/"
 
   SCR_CAMERA_SETTING:
     used_apis:
-      - "GET /api/v1/cameras"
-      - "DELETE /api/v1/cameras/{camera_id}"
-      - "POST /api/v1/cameras/{camera_id}/test-connection"
+      - "GET /api/v1/cameras/"
+      - "DELETE /api/v1/cameras/{camera_id}/"
+      - "POST /api/v1/cameras/{camera_id}/test_connection/"
 
   SCR_CAMERA_FORM:
     used_apis:
-      - "GET /api/v1/cameras/{camera_id}"
-      - "POST /api/v1/cameras"
-      - "PUT /api/v1/cameras/{camera_id}"
-      - "POST /api/v1/cameras/test-connection"
+      - "GET /api/v1/cameras/{camera_id}/"
+      - "POST /api/v1/cameras/"
+      - "PUT /api/v1/cameras/{camera_id}/"
+      - "POST /api/v1/cameras/{camera_id}/test_connection/"
 
   SCR_MULTI_CAMERA_LATEST:
     used_apis:
-      - "POST /api/v1/images/latest/bulk"
-      - "GET /api/v1/images/{image_id}/binary"
+      - "GET /api/v1/images/latest_images/"
+      - "GET /api/v1/images/{image_id}/"
 
 
 # ==============================================================================
@@ -1686,7 +1845,9 @@ confirmed_items:
   - "ログインAPIを定義する"
   - "ログイン後の初期画面はユーザー権限に応じて返却する"
   - "システム管理者向けに企業一覧取得APIを定義する"
+  - "システム管理者向けに企業登録APIを定義する"
   - "システム管理者、企業管理者向けに現場一覧取得APIを定義する"
+  - "システム管理者、企業管理者向けに現場登録APIを定義する"
   - "権限範囲内のカメラ一覧取得APIを定義する"
   - "カメラ登録APIを定義する"
   - "カメラ更新APIを定義する"
@@ -1802,4 +1963,3 @@ pending_items:
       - "含める"
       - "後続バージョンで追加"
       - "DB管理または別管理画面で対応"
-
