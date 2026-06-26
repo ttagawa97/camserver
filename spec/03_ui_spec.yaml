@@ -81,6 +81,20 @@ ui_policy:
   timezone:
     display_timezone: "Asia/Tokyo"
 
+  authentication_state_policy:
+    source_of_truth: "server_session"
+    rules:
+      - "ログイン成功後、後続APIが認証済みで呼べることを前提とする"
+      - "ユーザー情報をlocalStorage等へ保存してもよいが、表示キャッシュ用途に限定する"
+      - "localStorage等の保存情報だけで認証済み画面を確定表示してはならない"
+      - "ブラウザリフレッシュ時は /api/v1/auth/me/ を呼び、200の場合のみログイン後画面を復元する"
+      - "/api/v1/auth/me/ が401または403の場合は保存済みユーザー情報を削除し、ログイン画面を表示する"
+      - "認証必須APIで401または403が返った場合、モックデータへ自動フォールバックしてはならない"
+      - "開発用モックは VITE_USE_MOCK=true 等の明示設定時のみ使用する"
+    loading_behavior:
+      - "リフレッシュ直後から /api/v1/auth/me/ の結果が返るまでは認証確認中表示を出す"
+      - "認証確認中にログイン画面を一瞬表示してから遷移する挙動は禁止する"
+
 
 # ==============================================================================
 # 画面ID一覧
@@ -342,6 +356,9 @@ SCR_LOGIN:
       success:
         description: "認証成功後、権限に応じた初期画面へ遷移する"
         transition_rule: "role_initial_screen に従う"
+        required_post_condition:
+          - "同一ブラウザセッションで認証必須APIを呼び出せること"
+          - "リフレッシュ後に /api/v1/auth/me/ でログイン状態を復元できること"
       failure:
         message: "ログインIDまたはパスワードが正しくありません"
 
@@ -1467,6 +1484,10 @@ ui_validation_rules:
 ui_error_handling:
   authentication_error:
     message: "ログインIDまたはパスワードが正しくありません"
+    handling:
+      - "ログインAPIの401はログインフォーム内に表示する"
+      - "ログイン後APIの401/403はセッション切れとして扱い、保存済みユーザー情報を削除してログイン画面へ戻す"
+      - "ログイン後APIの401/403を一般的な通信エラーとして画面上部に出し続けてはならない"
 
   authorization_error:
     message: "この操作を行う権限がありません"

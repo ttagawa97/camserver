@@ -89,6 +89,23 @@ api_policy:
       - "Session認証"
       - "JWT Bearer Token"
     recommendation: "現行実装はSession認証。JWTを採用する場合はレスポンス、ヘッダー、ログアウト仕様を同時に更新する"
+    contract:
+      login_success_definition:
+        - "ログインAPIが200を返すだけでは認証成功とみなさない"
+        - "ログイン成功時点で、同一ブラウザセッションから後続の認証必須APIが追加の手作業なしで成功すること"
+        - "Session認証の場合、サーバーはDjango sessionを作成し、Set-Cookieでsessionidを返却すること"
+        - "JWT認証の場合、サーバーはaccess_tokenを返却し、フロントエンドはAuthorizationヘッダーに設定すること"
+      frontend_auth_source_of_truth:
+        - "フロントエンドはlocalStorage上のユーザー情報だけを認証済み判定の根拠にしてはならない"
+        - "画面リフレッシュ時は /api/v1/auth/me/ を呼び、200の場合のみログイン状態を復元する"
+        - "/api/v1/auth/me/ が401または403の場合は保存済み表示情報を破棄し、ログイン画面に戻す"
+      session_request_policy:
+        - "Session認証を採用する場合、フロントエンドのfetchは credentials: 'same-origin' または 'include' を指定する"
+        - "Session認証でPOST/PUT/PATCH/DELETEを呼ぶ場合、CSRFトークンの取得・送信方式を実装する"
+        - "CSRFトークンは Cookie または専用APIで取得し、X-CSRFToken ヘッダーで送信する"
+      prohibited_fallbacks:
+        - "認証必須APIが401/403になった場合に、ユーザーに知らせずモックデータへ自動フォールバックしてはならない"
+        - "開発用モックは明示的な VITE_USE_MOCK=true のときのみ使用する"
 
   authorization:
     method: "Role Based Access Control"
@@ -120,6 +137,11 @@ common_headers:
       value: "Bearer {access_token}"
       required: false
       note: "JWT Bearer Token採用時のみ使用。現行のSession認証では未使用"
+
+    X-CSRFToken:
+      value: "{csrf_token}"
+      required: "Session認証でPOST/PUT/PATCH/DELETEを呼ぶ場合は必須"
+      note: "Django SessionAuthentication利用時のCSRF検証に使用する"
 
     X-Request-Id:
       value: "{request_id}"
@@ -330,7 +352,8 @@ authentication_apis:
     description: "ユーザー名、パスワードを検証し、ログインユーザー情報を返却する"
     notes:
       - "Django REST Framework DefaultRouter で提供するため、末尾スラッシュを必須とする"
-      - "現行実装は Django SessionAuthentication を前提としており、ログインレスポンスで access_token は返却しない"
+      - "現行実装方針は Django SessionAuthentication。ログイン成功時は django.contrib.auth.login 相当の処理でサーバー側セッションを確立し、Set-Cookieでsessionidを返却する"
+      - "ログインレスポンスで access_token は返却しない。JWTへ変更する場合は authentication.contract と common_headers.Authorization を同時に更新する"
 
     request:
       body:
@@ -345,6 +368,10 @@ authentication_apis:
 
     response:
       success_status: 200
+      required_headers:
+        Set-Cookie:
+          required: true
+          description: "Session認証の場合、sessionidを含むCookieを返却する"
       body:
         success:
           type: "boolean"
@@ -446,6 +473,10 @@ authentication_apis:
     path: "/api/v1/auth/me/"
     authentication_required: true
     description: "現在ログイン中のユーザー情報と権限範囲を取得する"
+    frontend_usage:
+      - "アプリ初期表示時、localStorage等の表示キャッシュより先に本APIでセッション有効性を確認する"
+      - "200の場合はログイン状態を復元する"
+      - "401または403の場合はログイン画面を表示する"
 
     response:
       success_status: 200
