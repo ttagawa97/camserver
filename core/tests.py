@@ -338,6 +338,32 @@ class CompanySiteCreateApiTests(APITestCase):
 
         with self.settings(MEDIA_ROOT=media_root):
             self.client.force_authenticate(user=self.system_admin)
+            target_company_admin = User.objects.create_user(username='target_company_admin', password='password')
+            UserRole.objects.create(
+                user=target_company_admin,
+                role='company_admin',
+                company=self.company,
+            )
+            target_site_admin = User.objects.create_user(username='target_site_admin', password='password')
+            UserRole.objects.create(
+                user=target_site_admin,
+                role='site_admin',
+                company=self.company,
+                site=self.site,
+            )
+            target_general_user = User.objects.create_user(username='target_general_user', password='password')
+            UserRole.objects.create(
+                user=target_general_user,
+                role='general_user',
+                company=self.company,
+                site=self.site,
+            )
+            other_company_user = User.objects.create_user(username='other_company_user', password='password')
+            UserRole.objects.create(
+                user=other_company_user,
+                role='general_user',
+                company=self.other_company,
+            )
             camera = Camera.objects.create(
                 site=self.site,
                 code='camera_000001',
@@ -369,6 +395,19 @@ class CompanySiteCreateApiTests(APITestCase):
             self.assertFalse(Image.objects.filter(camera_id=camera.id).exists())
             self.assertFalse(os.path.exists(os.path.join(media_root, image_path)))
             self.assertFalse(os.path.exists(os.path.join(media_root, thumb_path)))
+            self.assertEqual(response.data['data']['deleted_users'], 4)
+            target_company_admin.refresh_from_db()
+            target_site_admin.refresh_from_db()
+            target_general_user.refresh_from_db()
+            other_company_user.refresh_from_db()
+            self.system_admin.refresh_from_db()
+            self.company_admin.refresh_from_db()
+            self.assertFalse(target_company_admin.is_active)
+            self.assertFalse(target_site_admin.is_active)
+            self.assertFalse(target_general_user.is_active)
+            self.assertFalse(self.company_admin.is_active)
+            self.assertTrue(other_company_user.is_active)
+            self.assertTrue(self.system_admin.is_active)
 
     def test_delete_site_removes_related_images_and_files(self):
         media_root = tempfile.mkdtemp()
@@ -376,6 +415,20 @@ class CompanySiteCreateApiTests(APITestCase):
 
         with self.settings(MEDIA_ROOT=media_root):
             self.client.force_authenticate(user=self.company_admin)
+            target_site_admin = User.objects.create_user(username='delete_site_admin', password='password')
+            UserRole.objects.create(
+                user=target_site_admin,
+                role='site_admin',
+                company=self.company,
+                site=self.site,
+            )
+            target_general_user = User.objects.create_user(username='delete_general_user', password='password')
+            UserRole.objects.create(
+                user=target_general_user,
+                role='general_user',
+                company=self.company,
+                site=self.site,
+            )
             camera = Camera.objects.create(
                 site=self.site,
                 code='camera_000001',
@@ -400,6 +453,13 @@ class CompanySiteCreateApiTests(APITestCase):
             self.assertFalse(Site.objects.filter(id=self.site.id).exists())
             self.assertFalse(Camera.objects.filter(id=camera.id).exists())
             self.assertFalse(os.path.exists(os.path.join(media_root, image_path)))
+            self.assertEqual(response.data['data']['deleted_users'], 2)
+            target_site_admin.refresh_from_db()
+            target_general_user.refresh_from_db()
+            self.company_admin.refresh_from_db()
+            self.assertFalse(target_site_admin.is_active)
+            self.assertFalse(target_general_user.is_active)
+            self.assertTrue(self.company_admin.is_active)
 
     def test_system_admin_can_create_user_with_spec_payload(self):
         self.client.force_authenticate(user=self.system_admin)

@@ -51,6 +51,7 @@ revision_history:
       - "複数カメラ最新画像取得APIを定義"
       - "権限チェック、エラー形式、共通レスポンス形式を定義"
       - "ユーザー管理API、ロール別アクセス制御、企業・現場所属の整合性バリデーションを追記"
+      - "企業削除API・現場削除APIに関連ユーザーの連動削除をサーバー側必須処理として追記"
 
 
 # ==============================================================================
@@ -317,8 +318,9 @@ api_list:
     - "GET  /api/v1/auth/me/"
 
   company:
-    - "GET /api/v1/companies/"
-    - "POST /api/v1/companies/"
+    - "GET    /api/v1/companies/"
+    - "POST   /api/v1/companies/"
+    - "DELETE /api/v1/companies/{company_id}/"
 
   user:
     - "GET    /api/v1/users/"
@@ -327,8 +329,9 @@ api_list:
     - "DELETE /api/v1/users/{user_id}/"
 
   site:
-    - "GET /api/v1/sites/"
-    - "POST /api/v1/sites/"
+    - "GET    /api/v1/sites/"
+    - "POST   /api/v1/sites/"
+    - "DELETE /api/v1/sites/{site_id}/"
 
   camera:
     - "GET    /api/v1/cameras/"
@@ -972,6 +975,57 @@ company_apis:
       - status: 403
         code: "FORBIDDEN"
 
+  delete_company:
+    api_id: "API_COMPANY_003"
+    name: "企業削除API"
+    method: "DELETE"
+    path: "/api/v1/companies/{company_id}/"
+    authentication_required: true
+    allowed_roles:
+      - "system_admin"
+    description: "企業を削除する。対象企業配下の現場、カメラ、撮影済み画像、関連ユーザーもサーバー側で削除する"
+
+    path_parameters:
+      company_id:
+        type: "string"
+        required: true
+
+    response:
+      success_status: 200
+      body:
+        success:
+          type: "boolean"
+          example: true
+        message:
+          type: "string"
+          example: "削除しました"
+
+    server_side_effects:
+      - "対象企業のstatusをdeletedにする"
+      - "対象企業配下のsiteのstatusをdeletedにする"
+      - "対象企業配下のcameraのstatusをdeletedにする"
+      - "対象企業配下のcaptured_image、camera_latest_image、image_available_dateを削除またはdeleted扱いにする"
+      - "対象企業配下の画像ファイル、サムネイルを削除する"
+      - "company_id が対象企業IDと一致する company_admin、site_admin、general_user を status=deleted にする"
+      - "対象企業配下のsite_idに所属する site_admin、general_user を status=deleted にする"
+      - "削除対象ユーザーの有効セッションを無効化する"
+
+    deletion_policy:
+      master_data: "論理削除を基本とする"
+      image_files: "物理削除を基本とする"
+      users: "論理削除を基本とする"
+      excluded_users:
+        - "system_admin"
+
+    errors:
+      - status: 403
+        code: "FORBIDDEN"
+      - status: 404
+        code: "NOT_FOUND"
+      - status: 409
+        code: "CONFLICT"
+        description: "削除処理中、参照整合性不整合など"
+
 
 # ==============================================================================
 # 現場API
@@ -1114,6 +1168,67 @@ site_apis:
         description: "所属企業未指定、現場名未入力、文字数超過、重複など"
       - status: 403
         code: "FORBIDDEN"
+
+  delete_site:
+    api_id: "API_SITE_003"
+    name: "現場削除API"
+    method: "DELETE"
+    path: "/api/v1/sites/{site_id}/"
+    authentication_required: true
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+    description: "現場を削除する。対象現場配下のカメラ、撮影済み画像、関連ユーザーもサーバー側で削除する"
+
+    path_parameters:
+      site_id:
+        type: "string"
+        required: true
+
+    authorization_rule:
+      system_admin:
+        - "任意のsite_idを削除可能"
+      company_admin:
+        - "自分のcompany_id配下のsite_idのみ削除可能"
+      site_admin:
+        - "使用不可"
+      general_user:
+        - "使用不可"
+
+    response:
+      success_status: 200
+      body:
+        success:
+          type: "boolean"
+          example: true
+        message:
+          type: "string"
+          example: "削除しました"
+
+    server_side_effects:
+      - "対象現場のstatusをdeletedにする"
+      - "対象現場配下のcameraのstatusをdeletedにする"
+      - "対象現場配下のcaptured_image、camera_latest_image、image_available_dateを削除またはdeleted扱いにする"
+      - "対象現場配下の画像ファイル、サムネイルを削除する"
+      - "site_id が対象現場IDと一致する site_admin、general_user を status=deleted にする"
+      - "削除対象ユーザーの有効セッションを無効化する"
+
+    deletion_policy:
+      master_data: "論理削除を基本とする"
+      image_files: "物理削除を基本とする"
+      users: "論理削除を基本とする"
+      excluded_users:
+        - "system_admin"
+        - "company_admin"
+
+    errors:
+      - status: 403
+        code: "FORBIDDEN"
+      - status: 404
+        code: "NOT_FOUND"
+      - status: 409
+        code: "CONFLICT"
+        description: "削除処理中、参照整合性不整合など"
 
 
 # ==============================================================================

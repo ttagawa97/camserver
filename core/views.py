@@ -393,6 +393,24 @@ def _delete_image_files(images):
     return deleted_files
 
 
+def _deactivate_users_for_company(company):
+    target_user_ids = UserRole.objects.filter(
+        Q(company=company) | Q(site__company=company),
+        role__in=('company_admin', 'site_admin', 'general_user'),
+    ).values_list('user_id', flat=True).distinct()
+
+    return User.objects.filter(id__in=target_user_ids, is_active=True).update(is_active=False)
+
+
+def _deactivate_users_for_site(site):
+    target_user_ids = UserRole.objects.filter(
+        site=site,
+        role__in=('site_admin', 'general_user'),
+    ).values_list('user_id', flat=True).distinct()
+
+    return User.objects.filter(id__in=target_user_ids, is_active=True).update(is_active=False)
+
+
 class CompanyViewSet(viewsets.ModelViewSet):
     """企業管理API"""
     queryset = Company.objects.all()
@@ -466,7 +484,9 @@ class CompanyViewSet(viewsets.ModelViewSet):
         company = self.get_object()
         images = list(Image.objects.filter(camera__site__company=company))
         deleted_files = _delete_image_files(images)
-        company.delete()
+        with transaction.atomic():
+            deactivated_users = _deactivate_users_for_company(company)
+            company.delete()
 
         return Response({
             'success': True,
@@ -474,6 +494,7 @@ class CompanyViewSet(viewsets.ModelViewSet):
             'data': {
                 'deleted_images': len(images),
                 'deleted_files': deleted_files,
+                'deleted_users': deactivated_users,
             },
         })
 
@@ -575,7 +596,9 @@ class SiteViewSet(viewsets.ModelViewSet):
 
         images = list(Image.objects.filter(camera__site=site_obj))
         deleted_files = _delete_image_files(images)
-        site_obj.delete()
+        with transaction.atomic():
+            deactivated_users = _deactivate_users_for_site(site_obj)
+            site_obj.delete()
 
         return Response({
             'success': True,
@@ -583,6 +606,7 @@ class SiteViewSet(viewsets.ModelViewSet):
             'data': {
                 'deleted_images': len(images),
                 'deleted_files': deleted_files,
+                'deleted_users': deactivated_users,
             },
         })
 

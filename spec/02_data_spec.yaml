@@ -46,6 +46,7 @@ revision_history:
       - "サムネイル、原寸画像、最新画像のデータ上の扱いを整理"
       - "未決事項として、暗号化方式、削除方式、サムネイル生成方式などを整理"
       - "ユーザー管理機能向けにロール別管理可能範囲、所属企業・所属現場の整合性ルールを追記"
+      - "企業削除・現場削除時の関連ユーザー連動削除ポリシーを追記"
 
 
 # ==============================================================================
@@ -382,6 +383,28 @@ user:
       - "company_admin は system_admin と company_admin を作成・更新・削除してはならない"
       - "site_admin と general_user はユーザー管理機能を利用できない"
       - "ユーザー削除は物理削除ではなく status=deleted の論理削除を基本方針とする"
+
+  cascade_delete_policy:
+    description: "企業または現場が削除された場合の関連ユーザーの扱い"
+    company_deleted:
+      target_users:
+        - "company_id が削除対象 company_id と一致する company_admin"
+        - "company_id が削除対象 company_id と一致する site_admin"
+        - "company_id が削除対象 company_id と一致する general_user"
+        - "削除対象企業配下の site_id に所属する site_admin、general_user"
+      action: "status=deleted による論理削除"
+      excluded_users:
+        - "system_admin"
+      note: "system_admin は企業に所属しないため、企業削除の連動削除対象外とする"
+    site_deleted:
+      target_users:
+        - "site_id が削除対象 site_id と一致する site_admin"
+        - "site_id が削除対象 site_id と一致する general_user"
+      action: "status=deleted による論理削除"
+      excluded_users:
+        - "system_admin"
+        - "company_admin"
+      note: "company_admin は現場に所属しないため、現場削除の連動削除対象外とする"
 
 
 # ==============================================================================
