@@ -48,6 +48,7 @@ revision_history:
       - "カメラ削除、接続テスト、パスワード上書き仕様をUI仕様として反映"
       - "左側カメラメニューのチェック選択と複数カメラ最新画像まとめ表示画面を定義"
       - "一般ユーザーにはカメラ管理メニューを表示しない制御を定義"
+      - "ユーザー管理画面、企業選択・現場選択からのユーザー管理遷移、ロール別の追加・編集・削除条件を追記"
 
 
 # ==============================================================================
@@ -151,6 +152,9 @@ screens:
   - screen_id: "SCR_MULTI_CAMERA_LATEST"
     name: "複数カメラ最新画像まとめ表示画面"
 
+  - screen_id: "SCR_USER_MANAGEMENT"
+    name: "ユーザー管理画面"
+
 
 # ==============================================================================
 # 権限別初期画面
@@ -253,12 +257,29 @@ screen_transitions:
     allowed_roles:
       - "system_admin"
 
+  open_company_user_management:
+    from: "SCR_COMPANY_SELECT"
+    to: "SCR_USER_MANAGEMENT"
+    trigger: "ユーザー管理ボタン押下"
+    allowed_roles:
+      - "system_admin"
+    description: "全企業を対象に、システム管理者・企業管理者・現場管理者・一般ユーザーを管理する"
+
   site_selected:
     from: "SCR_SITE_SELECT"
     to: "SCR_CAMERA_THUMBNAIL"
     allowed_roles:
       - "system_admin"
       - "company_admin"
+
+  open_site_user_management:
+    from: "SCR_SITE_SELECT"
+    to: "SCR_USER_MANAGEMENT"
+    trigger: "ユーザー管理ボタン押下"
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+    description: "選択中企業または選択中現場のユーザーを管理する"
 
   open_site_add_form:
     from: "SCR_SITE_SELECT"
@@ -413,6 +434,7 @@ SCR_COMPANY_SELECT:
       - "選択ボタン"
       - "企業追加ボタン"
       - "企業削除ボタン"
+      - "ユーザー管理ボタン"
 
   display_items:
     company_list:
@@ -468,6 +490,17 @@ SCR_COMPANY_SELECT:
         - "対象企業配下の現場を削除する"
         - "対象企業配下のカメラを削除する"
         - "対象企業配下の撮影済み画像メタデータ、画像ファイル、サムネイルを削除する"
+
+    open_user_management:
+      label: "ユーザー管理"
+      trigger: "ユーザー管理ボタン押下"
+      api: "GET /api/v1/users/"
+      transition_to: "SCR_USER_MANAGEMENT"
+      behavior:
+        - "system_adminのみ表示する"
+        - "選択企業がある場合は、その企業をユーザー管理画面の企業初期値にする"
+        - "選択企業がない場合も、ユーザー管理画面では企業選択欄から企業管理者・現場管理者・一般ユーザーの所属先企業を選択できる"
+        - "システム管理者ユーザーを作成する場合、企業選択と現場選択は不要とする"
 
   empty_state:
     message: "表示可能な企業がありません"
@@ -567,6 +600,7 @@ SCR_SITE_SELECT:
       - "選択ボタン"
       - "現場追加ボタン"
       - "現場削除ボタン"
+      - "ユーザー管理ボタン"
       - "戻るボタン"
 
   display_items:
@@ -622,6 +656,18 @@ SCR_SITE_SELECT:
       side_effects:
         - "対象現場配下のカメラを削除する"
         - "対象現場配下の撮影済み画像メタデータ、画像ファイル、サムネイルを削除する"
+
+    open_user_management:
+      label: "ユーザー管理"
+      trigger: "ユーザー管理ボタン押下"
+      api: "GET /api/v1/users/"
+      transition_to: "SCR_USER_MANAGEMENT"
+      behavior:
+        - "system_adminとcompany_adminに表示する"
+        - "system_adminは選択中企業を対象企業としてユーザー管理画面を表示する"
+        - "company_adminはログインユーザーの所属企業を対象企業としてユーザー管理画面を表示する"
+        - "現場行を選択している場合は、その現場を一般ユーザー追加時の現場初期値にする"
+        - "company_adminは現場管理者と一般ユーザーのみ追加・編集・削除できる"
 
     back:
       label: "戻る"
@@ -1464,6 +1510,193 @@ SCR_MULTI_CAMERA_LATEST:
 
 
 # ==============================================================================
+# SCR_USER_MANAGEMENT: ユーザー管理画面
+# ==============================================================================
+SCR_USER_MANAGEMENT:
+  name: "ユーザー管理画面"
+  purpose: "権限に応じてログインユーザーを追加・編集・削除する"
+
+  access:
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+    denied_roles:
+      - "site_admin"
+      - "general_user"
+
+  context:
+    system_admin:
+      allowed_scope: "全企業・全現場"
+      description: "全ロールのユーザーを管理できる"
+    company_admin:
+      required_context:
+        - "user.company_id"
+      allowed_scope: "所属企業配下"
+      description: "所属企業配下の現場管理者と一般ユーザーのみ管理できる"
+
+  layout:
+    type: "list_and_form"
+    components:
+      - "ヘッダー"
+      - "パンくず"
+      - "ユーザー一覧"
+      - "ユーザー登録・編集フォーム"
+      - "保存ボタン"
+      - "削除ボタン"
+      - "キャンセルボタン"
+      - "戻るボタン"
+
+  display_items:
+    user_list:
+      source: "user"
+      columns:
+        - key: "login_id"
+          label: "ログインID"
+        - key: "user_name"
+          label: "ユーザー名"
+        - key: "role"
+          label: "権限"
+        - key: "company_name"
+          label: "企業"
+          optional: true
+        - key: "site_name"
+          label: "現場"
+          optional: true
+        - key: "status"
+          label: "状態"
+
+  form_fields:
+    login_id:
+      label: "ログインID"
+      input_type: "text"
+      required: true
+      max_length: 150
+      unique: true
+    user_name:
+      label: "ユーザー名"
+      input_type: "text"
+      required: true
+      max_length: 255
+    password:
+      label: "パスワード"
+      input_type: "password"
+      required_on_create: true
+      required_on_update: false
+      description: "編集時に空欄の場合は既存パスワードを変更しない"
+    role:
+      label: "権限"
+      input_type: "select"
+      required: true
+      allowed_values:
+        system_admin: "システム管理者"
+        company_admin: "企業管理者"
+        site_admin: "現場管理者"
+        general_user: "一般ユーザー"
+    company_id:
+      label: "企業"
+      input_type: "select"
+      required_condition: "roleがcompany_admin、site_admin、general_userの場合は必須"
+      visible_condition: "roleがsystem_admin以外の場合に表示する"
+      behavior:
+        - "system_adminは全企業から選択できる"
+        - "company_adminはログインユーザーの所属企業で固定し、変更不可とする"
+    site_id:
+      label: "現場"
+      input_type: "select"
+      required_condition: "roleがsite_admin、general_userの場合は必須"
+      visible_condition: "roleがsite_adminまたはgeneral_userの場合に表示する"
+      behavior:
+        - "選択中company_id配下の現場のみ表示する"
+        - "選択中company_idを変更した場合、現場選択肢も連動して更新する"
+        - "現場選択画面から現場行を選択して遷移した場合、その現場を初期値にする"
+
+  allowed_role_operations:
+    system_admin:
+      creatable_roles:
+        - "system_admin"
+        - "company_admin"
+        - "site_admin"
+        - "general_user"
+      editable_roles:
+        - "system_admin"
+        - "company_admin"
+        - "site_admin"
+        - "general_user"
+      deletable_roles:
+        - "system_admin"
+        - "company_admin"
+        - "site_admin"
+        - "general_user"
+    company_admin:
+      creatable_roles:
+        - "site_admin"
+        - "general_user"
+      editable_roles:
+        - "site_admin"
+        - "general_user"
+      deletable_roles:
+        - "site_admin"
+        - "general_user"
+      fixed_company_id: "login_user.company_id"
+
+  actions:
+    load_users:
+      api: "GET /api/v1/users/"
+      trigger: "画面表示時、検索条件変更時"
+      behavior:
+        - "system_adminは全ユーザーまたは選択企業・選択現場で絞り込んだユーザーを取得する"
+        - "company_adminは所属企業配下の現場管理者・一般ユーザーのみ取得する"
+
+    create_user:
+      label: "追加"
+      api: "POST /api/v1/users/"
+      validation:
+        - "ログインID必須"
+        - "ユーザー名必須"
+        - "新規登録時はパスワード必須"
+        - "system_admin以外は企業必須"
+        - "site_admin、general_userは現場必須"
+        - "site_idを指定する場合、site.company_id と company_id が一致すること"
+      success:
+        message: "ユーザーを登録しました"
+        behavior: "ユーザー一覧を再取得する"
+
+    update_user:
+      label: "編集"
+      api: "PUT /api/v1/users/{user_id}/"
+      validation:
+        - "作成時と同じ所属・権限整合性を満たすこと"
+        - "パスワード空欄の場合はパスワードを変更しない"
+      success:
+        message: "ユーザーを更新しました"
+        behavior: "ユーザー一覧を再取得する"
+
+    delete_user:
+      label: "削除"
+      api: "DELETE /api/v1/users/{user_id}/"
+      confirmation:
+        required: true
+        message: "選択したユーザーを削除します。よろしいですか？"
+      success:
+        message: "ユーザーを削除しました"
+        behavior: "ユーザー一覧を再取得する"
+
+    back:
+      label: "戻る"
+      behavior:
+        - "企業選択画面から遷移した場合はSCR_COMPANY_SELECTへ戻る"
+        - "現場選択画面から遷移した場合はSCR_SITE_SELECTへ戻る"
+
+  empty_state:
+    message: "表示可能なユーザーがありません"
+
+  notes:
+    - "ユーザー管理の権限制御はUI表示だけでなく、必ずAPI側でも検証する"
+    - "一般ユーザーは所属現場配下のカメラ画像のみ参照可能とする"
+    - "ユーザー削除後、削除対象ユーザーの既存セッションを無効化するかはサーバー側で検討する"
+
+
+# ==============================================================================
 # 権限別メニュー表示制御
 # ==============================================================================
 role_based_ui_control:
@@ -1476,10 +1709,12 @@ role_based_ui_control:
       - "SCR_CAMERA_SETTING"
       - "SCR_CAMERA_FORM"
       - "SCR_MULTI_CAMERA_LATEST"
+      - "SCR_USER_MANAGEMENT"
     visible_menus:
       - "設定メニュー"
       - "カメラ設定"
       - "まとめて参照"
+      - "ユーザー管理"
     allowed_actions:
       - "企業選択"
       - "現場選択"
@@ -1490,6 +1725,9 @@ role_based_ui_control:
       - "カメラ再設定"
       - "カメラ削除"
       - "接続テスト"
+      - "ユーザー追加"
+      - "ユーザー編集"
+      - "ユーザー削除"
 
   company_admin:
     visible_screens:
@@ -1499,10 +1737,12 @@ role_based_ui_control:
       - "SCR_CAMERA_SETTING"
       - "SCR_CAMERA_FORM"
       - "SCR_MULTI_CAMERA_LATEST"
+      - "SCR_USER_MANAGEMENT"
     visible_menus:
       - "設定メニュー"
       - "カメラ設定"
       - "まとめて参照"
+      - "ユーザー管理"
     allowed_actions:
       - "現場選択"
       - "画像閲覧"
@@ -1512,6 +1752,12 @@ role_based_ui_control:
       - "カメラ再設定"
       - "カメラ削除"
       - "接続テスト"
+      - "現場管理者追加"
+      - "現場管理者編集"
+      - "現場管理者削除"
+      - "一般ユーザー追加"
+      - "一般ユーザー編集"
+      - "一般ユーザー削除"
 
   site_admin:
     visible_screens:
@@ -1532,6 +1778,10 @@ role_based_ui_control:
       - "カメラ再設定"
       - "カメラ削除"
       - "接続テスト"
+    denied_actions:
+      - "ユーザー追加"
+      - "ユーザー編集"
+      - "ユーザー削除"
 
   general_user:
     visible_screens:
@@ -1552,6 +1802,9 @@ role_based_ui_control:
       - "カメラ再設定"
       - "カメラ削除"
       - "接続テスト"
+      - "ユーザー追加"
+      - "ユーザー編集"
+      - "ユーザー削除"
 
 
 # ==============================================================================

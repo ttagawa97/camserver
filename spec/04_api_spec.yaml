@@ -50,6 +50,7 @@ revision_history:
       - "原寸画像取得APIを定義"
       - "複数カメラ最新画像取得APIを定義"
       - "権限チェック、エラー形式、共通レスポンス形式を定義"
+      - "ユーザー管理API、ロール別アクセス制御、企業・現場所属の整合性バリデーションを追記"
 
 
 # ==============================================================================
@@ -281,6 +282,9 @@ error_codes:
   DUPLICATE_ERROR:
     message: "重複するデータが存在します"
 
+  CONFLICT:
+    message: "現在の状態では操作できません"
+
   CAMERA_CONNECTION_FAILED:
     message: "カメラへの接続に失敗しました"
 
@@ -315,6 +319,12 @@ api_list:
   company:
     - "GET /api/v1/companies/"
     - "POST /api/v1/companies/"
+
+  user:
+    - "GET    /api/v1/users/"
+    - "POST   /api/v1/users/"
+    - "PUT    /api/v1/users/{user_id}/"
+    - "DELETE /api/v1/users/{user_id}/"
 
   site:
     - "GET /api/v1/sites/"
@@ -527,6 +537,331 @@ authentication_apis:
               format: "date-time"
         is_active:
           type: "boolean"
+
+
+# ==============================================================================
+# ユーザー管理API
+# ==============================================================================
+user_apis:
+  list_users:
+    api_id: "API_USER_001"
+    name: "ユーザー一覧取得API"
+    method: "GET"
+    path: "/api/v1/users/"
+    authentication_required: true
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+    description: "ユーザー管理画面に表示するユーザー一覧を取得する"
+
+    query_parameters:
+      company_id:
+        type: "string"
+        required: false
+        description: "企業IDで絞り込む。company_adminの場合はログインユーザーのcompany_idに固定する"
+      site_id:
+        type: "string"
+        required: false
+        description: "現場IDで絞り込む。指定時はcompany_id配下の現場であること"
+      role:
+        type: "string"
+        required: false
+        allowed_values:
+          - "system_admin"
+          - "company_admin"
+          - "site_admin"
+          - "general_user"
+      keyword:
+        type: "string"
+        required: false
+        description: "ログインIDまたはユーザー名の検索キーワード"
+      status:
+        type: "string"
+        required: false
+        allowed_values:
+          - "active"
+          - "inactive"
+          - "deleted"
+        default: "active"
+      page:
+        type: "integer"
+        required: false
+        default: 1
+      page_size:
+        type: "integer"
+        required: false
+        default: 50
+
+    response:
+      success_status: 200
+      body:
+        success:
+          type: "boolean"
+          example: true
+        data:
+          type: "object"
+          fields:
+            users:
+              type: "array"
+              items:
+                user_id:
+                  type: "string"
+                login_id:
+                  type: "string"
+                user_name:
+                  type: "string"
+                role:
+                  type: "string"
+                company_id:
+                  type: "string"
+                  nullable: true
+                company_name:
+                  type: "string"
+                  nullable: true
+                site_id:
+                  type: "string"
+                  nullable: true
+                site_name:
+                  type: "string"
+                  nullable: true
+                status:
+                  type: "string"
+            pagination:
+              ref: "common_response.pagination"
+
+    authorization_rules:
+      - "system_adminは全ユーザーを取得できる"
+      - "company_adminは自分の所属企業配下のsite_admin、general_userのみ取得できる"
+      - "site_admin、general_userは403を返す"
+
+    errors:
+      - status: 403
+        code: "FORBIDDEN"
+
+  create_user:
+    api_id: "API_USER_002"
+    name: "ユーザー登録API"
+    method: "POST"
+    path: "/api/v1/users/"
+    authentication_required: true
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+    description: "ログインユーザーを新規登録する"
+
+    request:
+      body:
+        login_id:
+          type: "string"
+          required: true
+          max_length: 150
+          unique: true
+          example: "site-admin-001"
+        user_name:
+          type: "string"
+          required: true
+          max_length: 255
+          example: "札幌現場管理者"
+        password:
+          type: "string"
+          required: true
+          min_length: 8
+          description: "サーバー側でハッシュ化して保存し、レスポンスには返却しない"
+        role:
+          type: "string"
+          required: true
+          allowed_values:
+            - "system_admin"
+            - "company_admin"
+            - "site_admin"
+            - "general_user"
+        company_id:
+          type: "string"
+          required_condition: "roleがcompany_admin、site_admin、general_userの場合は必須"
+          nullable_condition: "roleがsystem_adminの場合はnull"
+        site_id:
+          type: "string"
+          required_condition: "roleがsite_admin、general_userの場合は必須"
+          nullable_condition: "roleがsystem_admin、company_adminの場合はnull"
+
+    response:
+      success_status: 201
+      body:
+        success:
+          type: "boolean"
+          example: true
+        data:
+          type: "object"
+          fields:
+            user_id:
+              type: "string"
+            login_id:
+              type: "string"
+            user_name:
+              type: "string"
+            role:
+              type: "string"
+            company_id:
+              type: "string"
+              nullable: true
+            site_id:
+              type: "string"
+              nullable: true
+            status:
+              type: "string"
+              example: "active"
+
+    validation_rules:
+      - "login_idは必須かつ一意であること"
+      - "passwordは必須であり、サーバー側のパスワードポリシーを満たすこと"
+      - "system_adminはcompany_id、site_idをnullとする"
+      - "company_adminはcompany_id必須、site_idはnullとする"
+      - "site_admin、general_userはcompany_id、site_idを必須とする"
+      - "site_idを指定する場合、site.company_id と company_id が一致すること"
+
+    authorization_rules:
+      - "system_adminは全ロールを作成できる"
+      - "company_adminは自分の所属企業配下のsite_admin、general_userのみ作成できる"
+      - "company_adminから送信されたcompany_idはログインユーザーのcompany_idと一致しなければならない"
+      - "company_adminはsystem_admin、company_adminを作成できない"
+      - "site_admin、general_userは403を返す"
+
+    errors:
+      - status: 400
+        code: "VALIDATION_ERROR"
+      - status: 403
+        code: "FORBIDDEN"
+      - status: 409
+        code: "DUPLICATE_ERROR"
+
+  update_user:
+    api_id: "API_USER_003"
+    name: "ユーザー更新API"
+    method: "PUT"
+    path: "/api/v1/users/{user_id}/"
+    authentication_required: true
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+    description: "既存ユーザーの表示名、パスワード、権限、所属企業、所属現場を更新する"
+
+    path_parameters:
+      user_id:
+        type: "string"
+        required: true
+
+    request:
+      body:
+        login_id:
+          type: "string"
+          required: true
+          max_length: 150
+        user_name:
+          type: "string"
+          required: true
+          max_length: 255
+        password:
+          type: "string"
+          required: false
+          description: "未指定または空文字の場合は既存パスワードを変更しない"
+        role:
+          type: "string"
+          required: true
+          allowed_values:
+            - "system_admin"
+            - "company_admin"
+            - "site_admin"
+            - "general_user"
+        company_id:
+          type: "string"
+          required_condition: "roleがcompany_admin、site_admin、general_userの場合は必須"
+          nullable_condition: "roleがsystem_adminの場合はnull"
+        site_id:
+          type: "string"
+          required_condition: "roleがsite_admin、general_userの場合は必須"
+          nullable_condition: "roleがsystem_admin、company_adminの場合はnull"
+        status:
+          type: "string"
+          required: false
+          allowed_values:
+            - "active"
+            - "inactive"
+
+    response:
+      success_status: 200
+      body:
+        success:
+          type: "boolean"
+          example: true
+        data:
+          type: "object"
+          description: "更新後のユーザー情報。password_hashは返却しない"
+
+    validation_rules:
+      - "create_userと同じロール・所属整合性を満たすこと"
+      - "login_idを変更する場合も一意制約を満たすこと"
+      - "password未指定または空文字の場合はパスワードを変更しないこと"
+
+    authorization_rules:
+      - "system_adminは全ロールを更新できる"
+      - "company_adminは自分の所属企業配下のsite_admin、general_userのみ更新できる"
+      - "company_adminは対象ユーザーをsystem_adminまたはcompany_adminへ変更できない"
+      - "company_adminは対象ユーザーのcompany_idを自分の所属企業以外へ変更できない"
+      - "site_admin、general_userは403を返す"
+
+    errors:
+      - status: 400
+        code: "VALIDATION_ERROR"
+      - status: 403
+        code: "FORBIDDEN"
+      - status: 404
+        code: "NOT_FOUND"
+      - status: 409
+        code: "DUPLICATE_ERROR"
+
+  delete_user:
+    api_id: "API_USER_004"
+    name: "ユーザー削除API"
+    method: "DELETE"
+    path: "/api/v1/users/{user_id}/"
+    authentication_required: true
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+    description: "ユーザーを削除する。基本方針はstatus=deletedへの論理削除とする"
+
+    path_parameters:
+      user_id:
+        type: "string"
+        required: true
+
+    response:
+      success_status: 200
+      body:
+        success:
+          type: "boolean"
+          example: true
+        message:
+          type: "string"
+          example: "削除しました"
+
+    authorization_rules:
+      - "system_adminは全ロールを削除できる"
+      - "company_adminは自分の所属企業配下のsite_admin、general_userのみ削除できる"
+      - "company_adminはsystem_admin、company_adminを削除できない"
+      - "site_admin、general_userは403を返す"
+
+    safety_rules:
+      - "ログイン中の自分自身を削除する操作は409または400で拒否することを推奨する"
+      - "削除対象ユーザーの有効セッションを無効化するかはサーバー側で方針を決定する"
+
+    errors:
+      - status: 403
+        code: "FORBIDDEN"
+      - status: 404
+        code: "NOT_FOUND"
+      - status: 409
+        code: "CONFLICT"
 
 
 # ==============================================================================
@@ -1652,6 +1987,7 @@ role_based_api_access:
     allowed_api_groups:
       - "authentication"
       - "company"
+      - "user"
       - "site"
       - "camera"
       - "image"
@@ -1665,6 +2001,7 @@ role_based_api_access:
   company_admin:
     allowed_api_groups:
       - "authentication"
+      - "user"
       - "site"
       - "camera"
       - "image"
@@ -1685,6 +2022,7 @@ role_based_api_access:
       - "health"
     denied_api_groups:
       - "company"
+      - "user"
       - "site"
     access_scope:
       companies: "own_company"
@@ -1701,6 +2039,7 @@ role_based_api_access:
       - "GET /api/v1/cameras/"
     denied_api_groups:
       - "company"
+      - "user"
       - "site"
       - "camera_management"
     access_scope:
@@ -1820,6 +2159,7 @@ screen_api_mapping:
   SCR_COMPANY_SELECT:
     used_apis:
       - "GET /api/v1/companies/"
+      - "GET /api/v1/users/"
 
   SCR_COMPANY_FORM:
     used_apis:
@@ -1827,6 +2167,16 @@ screen_api_mapping:
 
   SCR_SITE_SELECT:
     used_apis:
+      - "GET /api/v1/sites/"
+      - "GET /api/v1/users/"
+
+  SCR_USER_MANAGEMENT:
+    used_apis:
+      - "GET /api/v1/users/"
+      - "POST /api/v1/users/"
+      - "PUT /api/v1/users/{user_id}/"
+      - "DELETE /api/v1/users/{user_id}/"
+      - "GET /api/v1/companies/"
       - "GET /api/v1/sites/"
 
   SCR_SITE_FORM:

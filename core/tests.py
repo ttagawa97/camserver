@@ -401,6 +401,149 @@ class CompanySiteCreateApiTests(APITestCase):
             self.assertFalse(Camera.objects.filter(id=camera.id).exists())
             self.assertFalse(os.path.exists(os.path.join(media_root, image_path)))
 
+    def test_system_admin_can_create_user_with_spec_payload(self):
+        self.client.force_authenticate(user=self.system_admin)
+
+        response = self.client.post(
+            reverse('user-list'),
+            {
+                'login_id': 'site-admin-001',
+                'user_name': '札幌現場管理者',
+                'password': 'password123',
+                'role': 'site_admin',
+                'company_id': str(self.company.id),
+                'site_id': str(self.site.id),
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['success'], True)
+        self.assertEqual(response.data['data']['login_id'], 'site-admin-001')
+        self.assertEqual(response.data['data']['user_name'], '札幌現場管理者')
+        self.assertEqual(response.data['data']['role'], 'site_admin')
+        self.assertEqual(response.data['data']['company_id'], str(self.company.id))
+        created_user = User.objects.get(username='site-admin-001')
+        self.assertTrue(created_user.check_password('password123'))
+        self.assertEqual(created_user.role.site, self.site)
+
+    def test_company_admin_can_only_list_own_company_site_users(self):
+        own_site_user = User.objects.create_user(username='own_site_user', password='password')
+        UserRole.objects.create(
+            user=own_site_user,
+            role='general_user',
+            company=self.company,
+            site=self.site,
+        )
+        other_site = Site.objects.create(company=self.other_company, code='site_000001', name='別企業現場')
+        other_site_user = User.objects.create_user(username='other_site_user', password='password')
+        UserRole.objects.create(
+            user=other_site_user,
+            role='general_user',
+            company=self.other_company,
+            site=other_site,
+        )
+        self.client.force_authenticate(user=self.company_admin)
+
+        response = self.client.get(reverse('user-list'))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        login_ids = {user['login_id'] for user in response.data['data']['users']}
+        self.assertIn('own_site_user', login_ids)
+        self.assertNotIn('other_site_user', login_ids)
+        self.assertNotIn('admin', login_ids)
+
+    def test_company_admin_cannot_create_company_admin(self):
+        self.client.force_authenticate(user=self.company_admin)
+
+        response = self.client.post(
+            reverse('user-list'),
+            {
+                'login_id': 'new_company_admin',
+                'user_name': '新企業管理者',
+                'password': 'password123',
+                'role': 'company_admin',
+                'company_id': str(self.company.id),
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.data['code'], 'FORBIDDEN')
+
+    def test_create_user_duplicate_login_id_returns_conflict(self):
+        self.client.force_authenticate(user=self.system_admin)
+
+        response = self.client.post(
+            reverse('user-list'),
+            {
+                'login_id': 'admin',
+                'user_name': '重複ユーザー',
+                'password': 'password123',
+                'role': 'system_admin',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(response.data['code'], 'DUPLICATE_ERROR')
+
+    def test_update_user_keeps_password_when_blank(self):
+        self.client.force_authenticate(user=self.system_admin)
+        managed_user = User.objects.create_user(username='managed', password='oldpassword123')
+        UserRole.objects.create(
+            user=managed_user,
+            role='general_user',
+            company=self.company,
+            site=self.site,
+        )
+
+        response = self.client.put(
+            reverse('user-detail', args=[managed_user.id]),
+            {
+                'login_id': 'managed-renamed',
+                'user_name': '管理対象ユーザー',
+                'password': '',
+                'role': 'general_user',
+                'company_id': str(self.company.id),
+                'site_id': str(self.site.id),
+                'status': 'inactive',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        managed_user.refresh_from_db()
+        self.assertEqual(managed_user.username, 'managed-renamed')
+        self.assertEqual(managed_user.first_name, '管理対象ユーザー')
+        self.assertFalse(managed_user.is_active)
+        self.assertTrue(managed_user.check_password('oldpassword123'))
+
+    def test_delete_user_logically_deactivates_target(self):
+        self.client.force_authenticate(user=self.system_admin)
+        managed_user = User.objects.create_user(username='delete_target', password='password')
+        UserRole.objects.create(
+            user=managed_user,
+            role='general_user',
+            company=self.company,
+            site=self.site,
+        )
+
+        response = self.client.delete(reverse('user-detail', args=[managed_user.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['success'], True)
+        managed_user.refresh_from_db()
+        self.assertFalse(managed_user.is_active)
+
+    def test_delete_self_is_rejected(self):
+        self.client.force_authenticate(user=self.system_admin)
+
+        response = self.client.delete(reverse('user-detail', args=[self.system_admin.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(response.data['code'], 'CONFLICT')
+
 
 class CameraConnectionTests(SimpleTestCase):
     @override_settings(CAMERA_LOCALHOST_FALLBACK_HOSTS=['172.23.48.1'])

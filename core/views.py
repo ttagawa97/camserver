@@ -11,6 +11,7 @@ from django.contrib.auth import authenticate, login as auth_login, logout as aut
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import URLValidator
 from django.middleware.csrf import get_token
@@ -55,6 +56,25 @@ def _forbidden(message='この操作を実行する権限がありません'):
         'code': 'FORBIDDEN',
         'message': message,
     }, status=status.HTTP_403_FORBIDDEN)
+
+
+def _conflict(message):
+    return Response({
+        'success': False,
+        'code': 'CONFLICT',
+        'message': message,
+    }, status=status.HTTP_409_CONFLICT)
+
+
+def _duplicate_error(message, field_errors=None):
+    body = {
+        'success': False,
+        'code': 'DUPLICATE_ERROR',
+        'message': message,
+    }
+    if field_errors:
+        body['errors'] = field_errors
+    return Response(body, status=status.HTTP_409_CONFLICT)
 
 
 def _next_numbered_code(model, prefix, filters=None):
@@ -137,6 +157,127 @@ def _get_scoped_site(user_role, site_id):
         return site, None
 
     return None, _forbidden()
+
+
+def _display_name(user):
+    return user.get_full_name() or user.first_name or user.username
+
+
+def _user_status(user):
+    return 'active' if user.is_active else 'inactive'
+
+
+def _user_response(user):
+    role = _user_role(user)
+    company = role.company if role else None
+    site = role.site if role else None
+
+    return {
+        'user_id': str(user.id),
+        'login_id': user.username,
+        'user_name': _display_name(user),
+        'role': role.role if role else None,
+        'company_id': str(company.id) if company else None,
+        'company_name': company.name if company else None,
+        'site_id': str(site.id) if site else None,
+        'site_name': site.name if site else None,
+        'status': _user_status(user),
+    }
+
+
+def _validate_user_payload(data, current_user=None, password_required=True):
+    errors = {}
+    login_id = data.get('login_id') or data.get('username')
+    user_name = data.get('user_name') or data.get('name') or data.get('first_name')
+    password = data.get('password')
+    role = data.get('role')
+    company_id = data.get('company_id') or data.get('company')
+    site_id = data.get('site_id') or data.get('site')
+    user_status = data.get('status', 'active')
+
+    if login_id is not None:
+        login_id = login_id.strip()
+    if user_name is not None:
+        user_name = user_name.strip()
+    if role is not None:
+        role = role.strip()
+    if user_status is not None:
+        user_status = user_status.strip()
+
+    check_duplicate_login = False
+    if not login_id:
+        errors['login_id'] = ['ログインIDを入力してください']
+    elif len(login_id) > 150:
+        errors['login_id'] = ['ログインIDは150文字以内で入力してください']
+    else:
+        check_duplicate_login = True
+
+    if not user_name:
+        errors['user_name'] = ['ユーザー名を入力してください']
+    elif len(user_name) > 255:
+        errors['user_name'] = ['ユーザー名は255文字以内で入力してください']
+
+    if password_required and not password:
+        errors['password'] = ['パスワードを入力してください']
+    elif password:
+        if len(password) < 8:
+            errors['password'] = ['パスワードは8文字以上で入力してください']
+
+    valid_roles = {choice[0] for choice in UserRole.ROLE_CHOICES}
+    if role not in valid_roles:
+        errors['role'] = ['権限を指定してください']
+
+    if user_status not in ('active', 'inactive'):
+        errors['status'] = ['ステータスはactiveまたはinactiveを指定してください']
+
+    company = None
+    if role in ('company_admin', 'site_admin', 'general_user'):
+        if not company_id:
+            errors['company_id'] = ['所属企業を指定してください']
+        else:
+            try:
+                company = Company.objects.get(id=company_id)
+            except (Company.DoesNotExist, ValueError):
+                errors['company_id'] = ['指定された企業が見つかりません']
+    elif company_id:
+        errors['company_id'] = ['システム管理者には所属企業を指定できません']
+
+    site = None
+    if role in ('site_admin', 'general_user'):
+        if not site_id:
+            errors['site_id'] = ['所属現場を指定してください']
+        else:
+            try:
+                site = Site.objects.select_related('company').get(id=site_id)
+            except (Site.DoesNotExist, ValueError):
+                errors['site_id'] = ['指定された現場が見つかりません']
+    elif site_id:
+        errors['site_id'] = ['この権限には所属現場を指定できません']
+
+    if company and site and site.company_id != company.id:
+        errors['site_id'] = ['所属現場は所属企業配下の現場を指定してください']
+
+    if errors:
+        return None, _validation_error('入力内容に誤りがあります', errors)
+
+    if check_duplicate_login:
+        duplicate = User.objects.filter(username=login_id)
+        if current_user:
+            duplicate = duplicate.exclude(id=current_user.id)
+        if duplicate.exists():
+            return None, _duplicate_error('重複するデータが存在します', {
+                'login_id': ['同じログインIDが既に登録されています'],
+            })
+
+    return {
+        'login_id': login_id,
+        'user_name': user_name,
+        'password': password,
+        'role': role,
+        'company': company if role in ('company_admin', 'site_admin', 'general_user') else None,
+        'site': site if role in ('site_admin', 'general_user') else None,
+        'status': user_status,
+    }, None
 
 
 def _validate_camera_payload(data, require_password=True):
@@ -443,6 +584,255 @@ class SiteViewSet(viewsets.ModelViewSet):
                 'deleted_images': len(images),
                 'deleted_files': deleted_files,
             },
+        })
+
+
+class UserViewSet(viewsets.ModelViewSet):
+    """ユーザー管理API"""
+    queryset = User.objects.select_related('role', 'role__company', 'role__site', 'role__site__company')
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def _request_role(self):
+        return _user_role(self.request.user)
+
+    def _management_forbidden(self):
+        return _forbidden('ユーザー管理を実行する権限がありません')
+
+    def get_queryset(self):
+        user_role = self._request_role()
+        users = User.objects.select_related('role', 'role__company', 'role__site', 'role__site__company')
+
+        if not user_role:
+            return users.none()
+
+        if user_role.role == 'system_admin':
+            return users
+
+        if user_role.role == 'company_admin' and user_role.company:
+            return users.filter(
+                role__role__in=('site_admin', 'general_user')
+            ).filter(
+                Q(role__company=user_role.company) | Q(role__site__company=user_role.company)
+            )
+
+        return users.none()
+
+    def get_object(self):
+        users = User.objects.select_related('role', 'role__company', 'role__site', 'role__site__company')
+        return get_object_or_404(users, pk=self.kwargs.get(self.lookup_field))
+
+    def _can_manage_payload(self, manager_role, payload):
+        if manager_role.role == 'system_admin':
+            return None
+
+        if manager_role.role != 'company_admin' or not manager_role.company:
+            return self._management_forbidden()
+
+        if payload['role'] not in ('site_admin', 'general_user'):
+            return _forbidden('企業管理者は現場管理者または一般ユーザーのみ管理できます')
+
+        if not payload['company'] or payload['company'].id != manager_role.company_id:
+            return _forbidden('所属企業以外のユーザーは管理できません')
+
+        if payload['site'] and payload['site'].company_id != manager_role.company_id:
+            return _forbidden('所属企業以外の現場は指定できません')
+
+        return None
+
+    def _can_manage_target(self, manager_role, target_user):
+        if manager_role.role == 'system_admin':
+            return None
+
+        if manager_role.role != 'company_admin' or not manager_role.company:
+            return self._management_forbidden()
+
+        target_role = _user_role(target_user)
+        if not target_role or target_role.role not in ('site_admin', 'general_user'):
+            return _forbidden('企業管理者は現場管理者または一般ユーザーのみ管理できます')
+
+        target_company_id = target_role.company_id
+        if target_role.site:
+            target_company_id = target_role.site.company_id
+
+        if target_company_id != manager_role.company_id:
+            return _forbidden('所属企業以外のユーザーは管理できません')
+
+        return None
+
+    def list(self, request, *args, **kwargs):
+        user_role = self._request_role()
+        if not user_role or user_role.role not in ('system_admin', 'company_admin'):
+            return self._management_forbidden()
+
+        users = self.get_queryset()
+
+        company_id = request.query_params.get('company_id')
+        if company_id:
+            users = users.filter(Q(role__company_id=company_id) | Q(role__site__company_id=company_id))
+
+        site_id = request.query_params.get('site_id')
+        if site_id:
+            users = users.filter(role__site_id=site_id)
+
+        role = request.query_params.get('role')
+        if role:
+            users = users.filter(role__role=role)
+
+        keyword = request.query_params.get('keyword')
+        if keyword:
+            users = users.filter(
+                Q(username__icontains=keyword)
+                | Q(first_name__icontains=keyword)
+                | Q(last_name__icontains=keyword)
+            )
+
+        user_status = request.query_params.get('status', 'active')
+        if user_status == 'active':
+            users = users.filter(is_active=True)
+        elif user_status in ('inactive', 'deleted'):
+            users = users.filter(is_active=False)
+        elif user_status != 'all':
+            return _validation_error('入力内容に誤りがあります', {
+                'status': ['ステータスはactive、inactive、deleted、allのいずれかを指定してください'],
+            })
+
+        users = users.order_by('id')
+
+        try:
+            page = max(int(request.query_params.get('page', 1)), 1)
+            page_size = min(max(int(request.query_params.get('page_size', 50)), 1), 200)
+        except ValueError:
+            return _validation_error('入力内容に誤りがあります', {
+                'pagination': ['pageとpage_sizeは数値で指定してください'],
+            })
+
+        total_count = users.count()
+        start = (page - 1) * page_size
+        end = start + page_size
+        total_pages = (total_count + page_size - 1) // page_size if total_count else 1
+
+        return Response({
+            'success': True,
+            'data': {
+                'users': [_user_response(user) for user in users[start:end]],
+                'pagination': {
+                    'page': page,
+                    'page_size': page_size,
+                    'total_count': total_count,
+                    'total_pages': total_pages,
+                },
+            },
+        })
+
+    def retrieve(self, request, *args, **kwargs):
+        user_role = self._request_role()
+        if not user_role or user_role.role not in ('system_admin', 'company_admin'):
+            return self._management_forbidden()
+
+        target_user = self.get_object()
+        forbidden_response = self._can_manage_target(user_role, target_user)
+        if forbidden_response:
+            return forbidden_response
+
+        return Response({
+            'success': True,
+            'data': _user_response(target_user),
+        })
+
+    def create(self, request, *args, **kwargs):
+        user_role = self._request_role()
+        if not user_role or user_role.role not in ('system_admin', 'company_admin'):
+            return self._management_forbidden()
+
+        payload, error_response = _validate_user_payload(request.data, password_required=True)
+        if error_response:
+            return error_response
+
+        forbidden_response = self._can_manage_payload(user_role, payload)
+        if forbidden_response:
+            return forbidden_response
+
+        with transaction.atomic():
+            user = User.objects.create_user(
+                username=payload['login_id'],
+                password=payload['password'],
+                first_name=payload['user_name'],
+                is_active=payload['status'] == 'active',
+            )
+            UserRole.objects.create(
+                user=user,
+                role=payload['role'],
+                company=payload['company'],
+                site=payload['site'],
+            )
+
+        return Response({
+            'success': True,
+            'data': _user_response(user),
+        }, status=status.HTTP_201_CREATED)
+
+    def update(self, request, *args, **kwargs):
+        user_role = self._request_role()
+        if not user_role or user_role.role not in ('system_admin', 'company_admin'):
+            return self._management_forbidden()
+
+        target_user = self.get_object()
+        forbidden_response = self._can_manage_target(user_role, target_user)
+        if forbidden_response:
+            return forbidden_response
+
+        payload, error_response = _validate_user_payload(
+            request.data,
+            current_user=target_user,
+            password_required=False,
+        )
+        if error_response:
+            return error_response
+
+        forbidden_response = self._can_manage_payload(user_role, payload)
+        if forbidden_response:
+            return forbidden_response
+
+        with transaction.atomic():
+            target_user.username = payload['login_id']
+            target_user.first_name = payload['user_name']
+            target_user.last_name = ''
+            target_user.is_active = payload['status'] == 'active'
+            if payload['password']:
+                target_user.set_password(payload['password'])
+            target_user.save()
+
+            role_obj, _ = UserRole.objects.get_or_create(user=target_user)
+            role_obj.role = payload['role']
+            role_obj.company = payload['company']
+            role_obj.site = payload['site']
+            role_obj.save()
+
+        return Response({
+            'success': True,
+            'data': _user_response(target_user),
+        })
+
+    def destroy(self, request, *args, **kwargs):
+        user_role = self._request_role()
+        if not user_role or user_role.role not in ('system_admin', 'company_admin'):
+            return self._management_forbidden()
+
+        target_user = self.get_object()
+        if target_user.id == request.user.id:
+            return _conflict('ログイン中の自分自身は削除できません')
+
+        forbidden_response = self._can_manage_target(user_role, target_user)
+        if forbidden_response:
+            return forbidden_response
+
+        target_user.is_active = False
+        target_user.save(update_fields=['is_active'])
+
+        return Response({
+            'success': True,
+            'message': '削除しました',
         })
 
 
