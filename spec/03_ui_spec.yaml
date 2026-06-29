@@ -95,6 +95,27 @@ ui_policy:
       - "リフレッシュ直後から /api/v1/auth/me/ の結果が返るまでは認証確認中表示を出す"
       - "認証確認中にログイン画面を一瞬表示してから遷移する挙動は禁止する"
 
+  view_state_persistence_policy:
+    description: "ブラウザリフレッシュ後も、ユーザーが表示中だった画面と選択状態を維持する"
+    storage: "localStorage等のクライアント側表示状態キャッシュ"
+    restore_timing:
+      - "ブラウザリフレッシュ時は /api/v1/auth/me/ による認証確認が成功した後に復元する"
+      - "認証確認が失敗した場合は保存済み表示状態を破棄し、ログイン画面を表示する"
+    persisted_items:
+      - "表示中画面ID"
+      - "選択中企業"
+      - "選択中現場"
+      - "選択中カメラ"
+      - "選択中日付"
+      - "複数カメラ最新画像まとめ表示用のチェック中カメラ"
+      - "カメラ登録・再設定画面の編集対象カメラ"
+    rules:
+      - "同一ログインユーザーの場合のみ保存済み表示状態を復元する"
+      - "ログアウト時、認証失敗時、または別ユーザーでログインした場合は保存済み表示状態を利用しない"
+      - "リフレッシュ後に権限別初期画面へ戻してはならず、可能な限り直前の表示中画面を維持する"
+      - "復元に必要な企業、現場、カメラ、画像日付などの一覧データは、復元後にAPIから再取得する"
+      - "保存済み表示状態は画面復元のための補助情報であり、権限判定や認証判定の根拠にしてはならない"
+
 
 # ==============================================================================
 # 画面ID一覧
@@ -785,6 +806,29 @@ SCR_CAMERA_THUMBNAIL:
 
   date_selector:
     description: "画像が存在する日付のみ選択可能なカレンダー"
+    implementation_policy:
+      library: "DayPicker（React用カレンダーコンポーネント）"
+      display_mode: "プルダウン方式"
+      closed_state:
+        display_text_format: "yyyy-mm-dd(曜)"
+        examples:
+          - "2026-06-29(月)"
+        description: "カレンダーを閉じている状態では、選択中日付のみを日付プルダウンボタンとして表示する"
+      opened_state:
+        description: "日付プルダウンボタン押下時に、ボタン直下へカレンダーをポップアップ表示する"
+        close_triggers:
+          - "日付選択"
+          - "カレンダー外クリック"
+          - "Escapeキー押下"
+      layout:
+        placement: "カメラ名表示領域の右側"
+        camera_name_width: "最大30文字相当の固定幅"
+        camera_name_overflow: "固定幅を超える場合は1行省略表示（ellipsis）"
+        gap_between_camera_name_and_selector: "カメラ名と日付プルダウンが近接しないよう十分な余白を確保する"
+      sizing:
+        calendar_width: "サムネイル表示領域を圧迫しない小型幅とする"
+        day_cell_spacing: "日付と日付の表示間隔を狭くし、1か月分がコンパクトに収まること"
+        note: "グローバルなtable/th/tdスタイルによりDayPicker内部の表が横長化しないよう、カレンダー内のtableはmin-width:0、th/tdはpadding:0で上書きする"
     default_date:
       value: "latest_available_date"
       description: "画像が存在する最新日付を初期選択する"
@@ -792,6 +836,9 @@ SCR_CAMERA_THUMBNAIL:
     selectable_date_rule:
       enabled_dates: "画像が存在する日付"
       disabled_dates: "画像が存在しない日付"
+      visual_rule:
+        enabled_dates: "画像が存在する日付は選択可能であることが分かる色を付ける"
+        disabled_dates: "画像が存在しない日付はグレーアウトし、クリックしても日付変更しない"
 
     date_scope:
       status: "未決"
