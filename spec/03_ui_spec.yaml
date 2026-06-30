@@ -190,9 +190,14 @@ common_components:
     description: "全画面共通ヘッダー"
     display_items:
       - "システム名"
+      - "ユーザー管理ボタン"
       - "ログインユーザー名"
       - "ユーザー権限"
       - "ログアウトボタン"
+    layout_rules:
+      - "ユーザー管理ボタンはログインユーザー名表示の左側に配置する"
+      - "ユーザー管理ボタンはsystem_admin、company_adminにのみ表示する"
+      - "SCR_USER_MANAGEMENT表示中はユーザー管理ボタンを非表示にする"
     optional_items:
       - "選択中企業名"
       - "選択中現場名"
@@ -258,13 +263,14 @@ screen_transitions:
     allowed_roles:
       - "system_admin"
 
-  open_company_user_management:
-    from: "SCR_COMPANY_SELECT"
+  open_user_management_from_header:
+    from: "共通ヘッダー"
     to: "SCR_USER_MANAGEMENT"
-    trigger: "ユーザー管理ボタン押下"
+    trigger: "ヘッダーのユーザー管理ボタン押下"
     allowed_roles:
       - "system_admin"
-    description: "全企業を対象に、システム管理者・企業管理者・現場管理者・一般ユーザーを管理する"
+      - "company_admin"
+    description: "system_adminは全企業を対象に全ロールを管理し、company_adminは所属企業配下の現場管理者・一般ユーザーを管理する"
 
   site_selected:
     from: "SCR_SITE_SELECT"
@@ -272,15 +278,6 @@ screen_transitions:
     allowed_roles:
       - "system_admin"
       - "company_admin"
-
-  open_site_user_management:
-    from: "SCR_SITE_SELECT"
-    to: "SCR_USER_MANAGEMENT"
-    trigger: "ユーザー管理ボタン押下"
-    allowed_roles:
-      - "system_admin"
-      - "company_admin"
-    description: "選択中企業または選択中現場のユーザーを管理する"
 
   open_site_add_form:
     from: "SCR_SITE_SELECT"
@@ -435,7 +432,6 @@ SCR_COMPANY_SELECT:
       - "選択ボタン"
       - "企業追加ボタン"
       - "企業削除ボタン"
-      - "ユーザー管理ボタン"
 
   display_items:
     company_list:
@@ -493,17 +489,6 @@ SCR_COMPANY_SELECT:
         - "対象企業配下の撮影済み画像メタデータ、画像ファイル、サムネイルを削除する"
         - "対象企業に所属する企業管理者、現場管理者、一般ユーザーを削除する"
         - "対象企業配下の現場に所属する現場管理者、一般ユーザーを削除する"
-
-    open_user_management:
-      label: "ユーザー管理"
-      trigger: "ユーザー管理ボタン押下"
-      api: "GET /api/v1/users/"
-      transition_to: "SCR_USER_MANAGEMENT"
-      behavior:
-        - "system_adminのみ表示する"
-        - "選択企業がある場合は、その企業をユーザー管理画面の企業初期値にする"
-        - "選択企業がない場合も、ユーザー管理画面では企業選択欄から企業管理者・現場管理者・一般ユーザーの所属先企業を選択できる"
-        - "システム管理者ユーザーを作成する場合、企業選択と現場選択は不要とする"
 
   empty_state:
     message: "表示可能な企業がありません"
@@ -603,7 +588,6 @@ SCR_SITE_SELECT:
       - "選択ボタン"
       - "現場追加ボタン"
       - "現場削除ボタン"
-      - "ユーザー管理ボタン"
       - "戻るボタン"
 
   display_items:
@@ -660,18 +644,6 @@ SCR_SITE_SELECT:
         - "対象現場配下のカメラを削除する"
         - "対象現場配下の撮影済み画像メタデータ、画像ファイル、サムネイルを削除する"
         - "対象現場に所属する現場管理者、一般ユーザーを削除する"
-
-    open_user_management:
-      label: "ユーザー管理"
-      trigger: "ユーザー管理ボタン押下"
-      api: "GET /api/v1/users/"
-      transition_to: "SCR_USER_MANAGEMENT"
-      behavior:
-        - "system_adminとcompany_adminに表示する"
-        - "system_adminは選択中企業を対象企業としてユーザー管理画面を表示する"
-        - "company_adminはログインユーザーの所属企業を対象企業としてユーザー管理画面を表示する"
-        - "現場行を選択している場合は、その現場を一般ユーザー追加時の現場初期値にする"
-        - "company_adminは現場管理者と一般ユーザーのみ追加・編集・削除できる"
 
     back:
       label: "戻る"

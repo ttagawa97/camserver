@@ -12,7 +12,7 @@ from urllib.parse import urlparse, urlunparse
 
 import requests
 from requests.auth import HTTPBasicAuth
-from PIL import Image as PILImage
+from PIL import Image as PILImage, ImageOps
 
 from django.utils import timezone
 from django.conf import settings
@@ -21,6 +21,24 @@ from core.models import Camera, Image, CameraSchedule
 logger = logging.getLogger(__name__)
 
 _WINDOWS_HOST_CACHE = None
+
+IMAGE_QUALITY_TO_SAVE_QUALITY = {
+    'VGA': 70,
+    'SVGA': 75,
+    'WXGA': 80,
+    'HD': 85,
+    'FullHD': 90,
+    '4K': 95,
+}
+
+IMAGE_QUALITY_SIZES = {
+    'VGA': (640, 480),
+    'SVGA': (800, 600),
+    'WXGA': (1280, 800),
+    'HD': (1280, 720),
+    'FullHD': (1920, 1080),
+    '4K': (3840, 2160),
+}
 
 
 def _is_wsl():
@@ -155,6 +173,36 @@ def generate_image_filename(camera):
     return filename
 
 
+def _image_quality_from_save_quality(save_quality):
+    quality = 'HD'
+    for label, value in IMAGE_QUALITY_TO_SAVE_QUALITY.items():
+        if save_quality >= value:
+            quality = label
+    return quality
+
+
+def convert_image_for_storage(image_bytes, camera):
+    """
+    取得画像をカメラ設定の保存画質に合わせ、保存用JPEGへ変換する。
+    """
+    quality_label = _image_quality_from_save_quality(camera.save_quality)
+    target_size = IMAGE_QUALITY_SIZES[quality_label]
+
+    with PILImage.open(BytesIO(image_bytes)) as pil_image:
+        pil_image = ImageOps.exif_transpose(pil_image)
+        pil_image.thumbnail(target_size, PILImage.Resampling.LANCZOS)
+
+        if pil_image.mode not in ('RGB', 'L'):
+            pil_image = pil_image.convert('RGB')
+
+        output = BytesIO()
+        pil_image.save(output, 'JPEG', quality=camera.save_quality, optimize=True)
+        converted_bytes = output.getvalue()
+        width, height = pil_image.size
+
+    return converted_bytes, width, height
+
+
 def test_camera_connection(camera):
     """
     カメラ接続テスト
@@ -224,27 +272,24 @@ def capture_camera_image(camera):
             logger.error(f"Failed to capture image from camera {camera.id}: status {response.status_code}")
             return None
 
-        # 画像を保存
+        # 保存画質に変換
         image_bytes = response.content
         logger.info(f"Downloaded {len(image_bytes)} bytes from camera {camera.id}")
+
+        try:
+            storage_image_bytes, width, height = convert_image_for_storage(image_bytes, camera)
+        except Exception as e:
+            logger.error(f"Failed to convert image from camera {camera.id}: {str(e)}")
+            return None
 
         # 保存パスとファイル名を生成
         storage_path = get_image_storage_path(camera)
         filename = generate_image_filename(camera)
         file_path = os.path.join(storage_path, filename)
 
-        # 元画像を保存
+        # 変換後画像を保存
         with open(file_path, 'wb') as f:
-            f.write(image_bytes)
-
-        # 画像メタデータを取得
-        try:
-            pil_image = PILImage.open(BytesIO(image_bytes))
-            width, height = pil_image.size
-            pil_image.close()
-        except Exception as e:
-            logger.warning(f"Failed to get image metadata: {str(e)}")
-            width, height = 0, 0
+            f.write(storage_image_bytes)
 
         # サムネイル生成
         thumbnail_path = generate_thumbnail(file_path, camera)
@@ -258,7 +303,7 @@ def capture_camera_image(camera):
             file_path=relative_path,
             thumbnail_path=relative_thumbnail_path,
             captured_at=timezone.now(),
-            file_size=len(image_bytes),
+            file_size=len(storage_image_bytes),
             width=width,
             height=height
         )

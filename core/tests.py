@@ -6,12 +6,14 @@ from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
 from requests.exceptions import ConnectionError
 from unittest.mock import patch
+from io import BytesIO
 import os
 import shutil
 import tempfile
 
 from core.models import Camera, Company, Image, Site, UserRole
-from tasks.camera import test_camera_connection
+from PIL import Image as PILImage
+from tasks.camera import capture_camera_image, test_camera_connection
 
 
 class CompanySiteCreateApiTests(APITestCase):
@@ -632,3 +634,43 @@ class CameraConnectionTests(SimpleTestCase):
         self.assertEqual(result['effective_url'], 'http://172.23.48.1:8080/snapshot.jpg')
         self.assertEqual(requests_get.call_args_list[0].args[0], 'http://localhost:8080/snapshot.jpg')
         self.assertEqual(requests_get.call_args_list[1].args[0], 'http://172.23.48.1:8080/snapshot.jpg')
+
+
+class CameraCaptureTests(APITestCase):
+    def setUp(self):
+        self.company = Company.objects.create(code='company_000001', name='企業')
+        self.site = Site.objects.create(company=self.company, code='site_000001', name='現場')
+
+    @patch('tasks.camera.requests.get')
+    def test_capture_converts_image_to_configured_quality_before_saving(self, requests_get):
+        media_root = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(media_root, ignore_errors=True))
+
+        source = PILImage.new('RGB', (1920, 1080), color='blue')
+        source_bytes = BytesIO()
+        source.save(source_bytes, 'JPEG')
+
+        class DummyResponse:
+            status_code = 200
+            content = source_bytes.getvalue()
+
+        requests_get.return_value = DummyResponse()
+
+        camera = Camera.objects.create(
+            site=self.site,
+            code='camera_000001',
+            name='HD保存カメラ',
+            url='http://example.com/snapshot.jpg',
+            save_quality=85,
+        )
+
+        with self.settings(MEDIA_ROOT=media_root):
+            image = capture_camera_image(camera)
+
+            self.assertIsNotNone(image)
+            self.assertEqual(image.width, 1280)
+            self.assertEqual(image.height, 720)
+            self.assertEqual(image.file_size, os.path.getsize(os.path.join(media_root, image.file_path)))
+
+            with PILImage.open(os.path.join(media_root, image.file_path)) as saved_image:
+                self.assertEqual(saved_image.size, (1280, 720))
