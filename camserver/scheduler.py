@@ -5,6 +5,7 @@ APScheduler scheduler for camera image capture tasks.
 import logging
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from django.conf import settings
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ class CameraSchedulerManager:
             self.scheduler.start()
             # 既存のカメラスケジュール情報をDBから読み込み、ジョブ再登録
             self._restore_camera_schedules()
+            self._schedule_ai_analysis()
             logger.info("APScheduler started successfully")
 
     def stop(self):
@@ -55,7 +57,7 @@ class CameraSchedulerManager:
                 job = self.scheduler.add_job(
                     func=capture_camera_image,
                     trigger=IntervalTrigger(minutes=camera.capture_interval_minutes),
-                    args=[camera],
+                    args=[camera.id],
                     id=job_id,
                     name=f'Capture {camera.name}',
                     replace_existing=True
@@ -65,7 +67,7 @@ class CameraSchedulerManager:
                 schedule, created = CameraSchedule.objects.get_or_create(camera=camera)
                 schedule.job_id = job_id
                 schedule.is_running = True
-                schedule.next_run_time = job.next_run_time
+                schedule.next_run_time = getattr(job, 'next_run_time', None)
                 schedule.save()
 
                 logger.info(f"Scheduled camera {camera.id}: {camera.name} - interval: {camera.capture_interval_minutes}min")
@@ -112,6 +114,20 @@ class CameraSchedulerManager:
                 self.schedule_camera(camera)
             except Exception as e:
                 logger.error(f"Failed to restore schedule for camera {camera.id}: {str(e)}")
+
+    def _schedule_ai_analysis(self):
+        """AI画像解析ジョブをスケジュール"""
+        from tasks.camera import process_pending_ai_analysis
+
+        interval_seconds = getattr(settings, 'OPENAI_AI_ANALYSIS_INTERVAL_SECONDS', 30)
+        self.scheduler.add_job(
+            func=process_pending_ai_analysis,
+            trigger=IntervalTrigger(seconds=interval_seconds),
+            id='ai_image_analysis',
+            name='AI image analysis',
+            replace_existing=True,
+        )
+        logger.info(f"Scheduled AI image analysis job - interval: {interval_seconds}s")
 
     def get_scheduler_info(self):
         """スケジューラー情報を取得"""

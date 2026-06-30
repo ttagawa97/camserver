@@ -65,6 +65,7 @@ class Camera(models.Model):
     # 画像設定
     save_quality = models.IntegerField(default=85)  # JPEG品質
     save_days = models.IntegerField(default=30)  # 保存日数
+    ai_text = models.TextField(blank=True, default='')  # AI画像解析プロンプト
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -81,6 +82,19 @@ class Camera(models.Model):
 
 class Image(models.Model):
     """取得画像メタデータモデル"""
+    AI_STATUS_NOT_REQUIRED = 'not_required'
+    AI_STATUS_PENDING = 'pending'
+    AI_STATUS_PROCESSING = 'processing'
+    AI_STATUS_COMPLETED = 'completed'
+    AI_STATUS_ERROR = 'error'
+    AI_ANALYSIS_STATUS_CHOICES = [
+        (AI_STATUS_NOT_REQUIRED, 'AI解析不要'),
+        (AI_STATUS_PENDING, 'AI解析待ち'),
+        (AI_STATUS_PROCESSING, 'AI解析中'),
+        (AI_STATUS_COMPLETED, 'AI解析完了'),
+        (AI_STATUS_ERROR, 'AI解析エラー'),
+    ]
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     camera = models.ForeignKey(Camera, on_delete=models.CASCADE, related_name='images')
     
@@ -93,6 +107,17 @@ class Image(models.Model):
     file_size = models.IntegerField(default=0)  # バイト
     width = models.IntegerField(default=0)
     height = models.IntegerField(default=0)
+
+    # AI画像解析
+    ai_analysis_status = models.CharField(
+        max_length=20,
+        choices=AI_ANALYSIS_STATUS_CHOICES,
+        default=AI_STATUS_NOT_REQUIRED,
+    )
+    ai_response_text = models.CharField(max_length=256, blank=True, default='')
+    ai_requested_at = models.DateTimeField(null=True, blank=True)
+    ai_responded_at = models.DateTimeField(null=True, blank=True)
+    ai_error_message = models.CharField(max_length=512, blank=True, default='')
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -102,6 +127,7 @@ class Image(models.Model):
         indexes = [
             models.Index(fields=['camera', '-captured_at']),
             models.Index(fields=['camera', 'captured_at']),
+            models.Index(fields=['ai_analysis_status', '-captured_at']),
         ]
 
     def __str__(self):

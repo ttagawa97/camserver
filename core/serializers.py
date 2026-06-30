@@ -40,7 +40,7 @@ class CameraSerializer(serializers.ModelSerializer):
         fields = (
             'id', 'site', 'code', 'name', 'description',
             'url', 'username',  # password は返さない
-            'capture_interval_minutes', 'is_capturing', 'save_quality', 'save_days',
+            'capture_interval_minutes', 'is_capturing', 'save_quality', 'save_days', 'ai_text',
             'is_active', 'last_capture_at', 'image_count', 'last_image',
             'created_at', 'updated_at'
         )
@@ -67,6 +67,7 @@ class ImageSerializer(serializers.ModelSerializer):
         fields = (
             'id', 'camera', 'camera_name', 'file_path', 'thumbnail_path',
             'captured_at', 'file_size', 'width', 'height',
+            'ai_analysis_status', 'ai_response_text', 'ai_requested_at', 'ai_responded_at',
             'created_at', 'updated_at'
         )
         read_only_fields = ('id', 'created_at', 'updated_at')

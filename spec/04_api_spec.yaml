@@ -1526,9 +1526,10 @@ camera_apis:
           required: true
         password:
           type: "string"
-          required: true
-          update_rule: "overwrite"
-          description: "入力値で既存パスワードを上書きする"
+          required: false
+          nullable: true
+          update_rule: "overwrite_if_present"
+          description: "入力値がある場合のみ既存パスワードを上書きする。空欄または未指定の場合は既存パスワードを変更しない"
         capture_interval_minutes:
           type: "integer"
           required: true
@@ -2304,7 +2305,7 @@ validation_rules:
       max_length: 255
 
     password:
-      required: true
+      required_condition: "create時は必須。update時は任意で、入力値がある場合のみ既存パスワードを上書きする"
       max_length: 1024
       note: "サーバー側で暗号化保存する。ログ出力禁止"
 

@@ -126,6 +126,7 @@ def _camera_response(camera, include_sensitive=False):
             'auth_method': 'basic',
             'login_id': camera.username,
             'retention_days': camera.save_days,
+            'ai_text': camera.ai_text,
         })
 
     return data
@@ -290,6 +291,7 @@ def _validate_camera_payload(data, require_password=True):
     capture_interval_minutes = data.get('capture_interval_minutes')
     image_quality = data.get('image_quality')
     retention_days = data.get('retention_days') or data.get('save_days')
+    ai_text = data.get('ai_text', '')
 
     if camera_name is not None:
         camera_name = camera_name.strip()
@@ -299,6 +301,10 @@ def _validate_camera_payload(data, require_password=True):
         auth_method = auth_method.strip()
     if login_id is not None:
         login_id = login_id.strip()
+    if ai_text is None:
+        ai_text = ''
+    else:
+        ai_text = str(ai_text).strip()
 
     if not camera_name:
         errors['camera_name'] = ['カメラ名を入力してください']
@@ -334,6 +340,9 @@ def _validate_camera_payload(data, require_password=True):
     if image_quality not in IMAGE_QUALITY_TO_SAVE_QUALITY:
         errors['image_quality'] = ['保存画質は定義済み値から指定してください']
 
+    if len(ai_text) > 2000:
+        errors['ai_text'] = ['AIテキストは2000文字以内で入力してください']
+
     try:
         retention_days = int(retention_days)
         if retention_days < 1:
@@ -352,6 +361,7 @@ def _validate_camera_payload(data, require_password=True):
         'capture_interval_minutes': capture_interval_minutes,
         'image_quality': image_quality,
         'retention_days': retention_days,
+        'ai_text': ai_text,
     }, None
 
 
@@ -359,8 +369,8 @@ def _schedule_camera_if_possible(camera):
     try:
         from camserver.scheduler import scheduler_instance
         scheduler_instance.schedule_camera(camera)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning('Failed to schedule camera %s: %s', camera.id, exc)
 
 
 def _delete_image_files(images):
@@ -970,6 +980,7 @@ class CameraViewSet(viewsets.ModelViewSet):
                     capture_interval_minutes=payload['capture_interval_minutes'],
                     save_quality=IMAGE_QUALITY_TO_SAVE_QUALITY[payload['image_quality']],
                     save_days=payload['retention_days'],
+                    ai_text=payload['ai_text'],
                     is_active=True,
                     is_capturing=True,
                 )
@@ -1018,6 +1029,7 @@ class CameraViewSet(viewsets.ModelViewSet):
         camera.capture_interval_minutes = payload['capture_interval_minutes']
         camera.save_quality = IMAGE_QUALITY_TO_SAVE_QUALITY[payload['image_quality']]
         camera.save_days = payload['retention_days']
+        camera.ai_text = payload['ai_text']
         camera.save()
 
         _schedule_camera_if_possible(camera)
@@ -1029,6 +1041,31 @@ class CameraViewSet(viewsets.ModelViewSet):
                 'updated_at': camera.updated_at,
             },
             'message': 'カメラ設定を保存しました',
+        })
+
+    @action(detail=True, methods=['delete'], url_path='images')
+    def delete_images(self, request, pk=None):
+        """カメラ保存済み画像一括削除API"""
+        user_role = _user_role(request.user)
+        if not user_role or user_role.role not in ('system_admin', 'company_admin', 'site_admin'):
+            return _forbidden()
+
+        camera = self.get_object()
+        images = list(Image.objects.filter(camera=camera))
+        deleted_files = _delete_image_files(images)
+        image_ids = [image.id for image in images]
+
+        with transaction.atomic():
+            deleted_images = Image.objects.filter(id__in=image_ids).delete()[0] if image_ids else 0
+
+        return Response({
+            'success': True,
+            'message': 'カメラの保存済み画像を削除しました',
+            'data': {
+                'camera_id': str(camera.id),
+                'deleted_image_count': deleted_images,
+                'deleted_file_count': deleted_files,
+            },
         })
 
     @action(detail=True, methods=['post'])
@@ -1182,6 +1219,8 @@ class ImageViewSet(viewsets.ReadOnlyModelViewSet):
             'width': image.width or None,
             'height': image.height or None,
             'file_size_bytes': image.file_size or None,
+            'ai_analysis_status': image.ai_analysis_status,
+            'ai_response_text': image.ai_response_text or None,
         }
 
     def _scoped_camera(self, camera_id):
@@ -1203,27 +1242,66 @@ class ImageViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=['get'])
     def by_date_range(self, request):
-        """日付範囲で画像取得"""
+        """指定カメラ、指定日付のサムネイル一覧"""
         camera_id = request.query_params.get('camera_id')
-        start_date = request.query_params.get('start_date')
-        end_date = request.query_params.get('end_date')
+        date = request.query_params.get('date')
 
         if not camera_id:
-            return Response({'error': 'camera_id required'}, status=status.HTTP_400_BAD_REQUEST)
+            return _validation_error('入力内容に誤りがあります', {
+                'camera_id': ['カメラIDを指定してください'],
+            })
+        if not date:
+            return _validation_error('入力内容に誤りがあります', {
+                'date': ['日付を指定してください'],
+            })
 
         try:
-            camera = Camera.objects.get(id=camera_id)
-            images = Image.objects.filter(camera=camera)
+            page = max(1, int(request.query_params.get('page', 1)))
+        except (TypeError, ValueError):
+            page = 1
 
-            if start_date:
-                images = images.filter(captured_at__gte=start_date)
-            if end_date:
-                images = images.filter(captured_at__lte=end_date)
+        try:
+            page_size = max(1, int(request.query_params.get('page_size', 100)))
+        except (TypeError, ValueError):
+            page_size = 100
 
-            serializer = self.get_serializer(images, many=True)
-            return Response(serializer.data)
-        except Camera.DoesNotExist:
-            return Response({'error': 'Camera not found'}, status=status.HTTP_404_NOT_FOUND)
+        camera = self._scoped_camera(camera_id)
+        if not camera:
+            return Response({
+                'success': False,
+                'code': 'IMAGE_NOT_FOUND',
+                'message': 'カメラまたは画像が見つかりません',
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        images = self.get_queryset().filter(camera=camera, captured_at__date=date)
+        if request.query_params.get('sort') == 'captured_at_asc':
+            images = images.order_by('captured_at')
+        else:
+            images = images.order_by('-captured_at')
+
+        total_count = images.count()
+        total_pages = max(1, (total_count + page_size - 1) // page_size)
+        page = min(page, total_pages)
+        start = (page - 1) * page_size
+        page_images = images[start:start + page_size]
+
+        return Response({
+            'success': True,
+            'data': {
+                'camera': {
+                    'camera_id': str(camera.id),
+                    'camera_name': camera.name,
+                },
+                'date': date,
+                'images': [self._image_item(request, image) for image in page_images],
+                'pagination': {
+                    'page': page,
+                    'page_size': page_size,
+                    'total_count': total_count,
+                    'total_pages': total_pages,
+                },
+            },
+        })
 
     @action(detail=False, methods=['get'], url_path='thumbnails')
     def thumbnails(self, request):

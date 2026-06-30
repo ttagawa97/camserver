@@ -5,6 +5,7 @@ Camera image capture tasks.
 import logging
 import os
 import subprocess
+import base64
 from io import BytesIO
 from datetime import datetime
 from pathlib import Path
@@ -39,6 +40,8 @@ IMAGE_QUALITY_SIZES = {
     'FullHD': (1920, 1080),
     '4K': (3840, 2160),
 }
+
+AI_ERROR_TEXT = 'API ERROR'
 
 
 def _is_wsl():
@@ -137,6 +140,17 @@ def _request_camera(camera, timeout):
     raise requests.exceptions.ConnectionError('No camera URL candidates available')
 
 
+def _resolve_camera(camera_or_id):
+    if isinstance(camera_or_id, Camera):
+        return camera_or_id
+
+    try:
+        return Camera.objects.select_related('site', 'site__company').get(id=camera_or_id)
+    except (Camera.DoesNotExist, ValueError, TypeError):
+        logger.error(f"Camera not found for capture: {camera_or_id}")
+        return None
+
+
 def get_image_storage_path(camera):
     """
     画像保存パスを生成
@@ -203,6 +217,118 @@ def convert_image_for_storage(image_bytes, camera):
     return converted_bytes, width, height
 
 
+def _truncate_ai_text(text):
+    max_length = getattr(settings, 'OPENAI_AI_RESPONSE_MAX_LENGTH', 256)
+    return (text or '')[:max_length]
+
+
+def _extract_openai_text(response_json):
+    output_text = response_json.get('output_text')
+    if isinstance(output_text, str) and output_text:
+        return output_text
+
+    parts = []
+    for item in response_json.get('output', []):
+        for content in item.get('content', []):
+            text = content.get('text')
+            if isinstance(text, str):
+                parts.append(text)
+    return '\n'.join(parts)
+
+
+def _call_openai_image_analysis(image, prompt):
+    api_key = getattr(settings, 'OPENAI_API_KEY', '')
+    if not api_key:
+        raise RuntimeError('OPENAI_API_KEY is not configured')
+
+    image_path = os.path.join(settings.MEDIA_ROOT, image.file_path)
+    with open(image_path, 'rb') as f:
+        encoded_image = base64.b64encode(f.read()).decode('ascii')
+
+    response = requests.post(
+        'https://api.openai.com/v1/responses',
+        headers={
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json',
+        },
+        json={
+            'model': getattr(settings, 'OPENAI_MODEL', 'gpt-5.5'),
+            'input': [
+                {
+                    'role': 'user',
+                    'content': [
+                        {'type': 'input_text', 'text': prompt},
+                        {
+                            'type': 'input_image',
+                            'image_url': f'data:image/jpeg;base64,{encoded_image}',
+                        },
+                    ],
+                },
+            ],
+        },
+        timeout=getattr(settings, 'OPENAI_AI_ANALYSIS_TIMEOUT_SECONDS', 60),
+    )
+    response.raise_for_status()
+    return _extract_openai_text(response.json())
+
+
+def analyze_image_with_ai(image):
+    """
+    保存済み画像1件をAI解析し、結果をDBへ保存する。
+    """
+    prompt = (image.camera.ai_text or '').strip()
+    if not prompt:
+        image.ai_analysis_status = Image.AI_STATUS_NOT_REQUIRED
+        image.ai_response_text = ''
+        image.ai_error_message = ''
+        image.save(update_fields=['ai_analysis_status', 'ai_response_text', 'ai_error_message', 'updated_at'])
+        return image
+
+    image.ai_analysis_status = Image.AI_STATUS_PROCESSING
+    image.ai_requested_at = timezone.now()
+    image.save(update_fields=['ai_analysis_status', 'ai_requested_at', 'updated_at'])
+
+    try:
+        ai_text = _call_openai_image_analysis(image, prompt)
+        image.ai_response_text = _truncate_ai_text(ai_text)
+        image.ai_analysis_status = Image.AI_STATUS_COMPLETED
+        image.ai_error_message = ''
+    except Exception as e:
+        logger.error(f"AI analysis failed for image {image.id}: {str(e)}")
+        image.ai_response_text = AI_ERROR_TEXT
+        image.ai_analysis_status = Image.AI_STATUS_ERROR
+        image.ai_error_message = str(e)[:512]
+
+    image.ai_responded_at = timezone.now()
+    image.save(update_fields=[
+        'ai_analysis_status',
+        'ai_response_text',
+        'ai_error_message',
+        'ai_responded_at',
+        'updated_at',
+    ])
+    return image
+
+
+def process_pending_ai_analysis(limit=1):
+    """
+    AI解析待ち画像を最新順（LIFO）に処理する。
+    """
+    processed = 0
+    images = (
+        Image.objects
+        .filter(ai_analysis_status=Image.AI_STATUS_PENDING)
+        .select_related('camera')
+        .order_by('-captured_at', '-created_at')[:limit]
+    )
+
+    for image in images:
+        analyze_image_with_ai(image)
+        processed += 1
+
+    return processed
+
+
 def test_camera_connection(camera):
     """
     カメラ接続テスト
@@ -256,6 +382,10 @@ def capture_camera_image(camera):
     """
     カメラから画像を取得して保存
     """
+    camera = _resolve_camera(camera)
+    if camera is None:
+        return None
+
     try:
         logger.info(f"Starting to capture image from camera {camera.id}: {camera.name}")
 
@@ -305,7 +435,12 @@ def capture_camera_image(camera):
             captured_at=timezone.now(),
             file_size=len(storage_image_bytes),
             width=width,
-            height=height
+            height=height,
+            ai_analysis_status=(
+                Image.AI_STATUS_PENDING
+                if (camera.ai_text or '').strip()
+                else Image.AI_STATUS_NOT_REQUIRED
+            ),
         )
 
         # カメラの最終取得時刻を更新

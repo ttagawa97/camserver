@@ -7,13 +7,15 @@ from rest_framework.test import APIClient, APITestCase
 from requests.exceptions import ConnectionError
 from unittest.mock import patch
 from io import BytesIO
+from datetime import timedelta
 import os
 import shutil
 import tempfile
 
 from core.models import Camera, Company, Image, Site, UserRole
+from camserver.scheduler import CameraSchedulerManager
 from PIL import Image as PILImage
-from tasks.camera import capture_camera_image, test_camera_connection
+from tasks.camera import capture_camera_image, process_pending_ai_analysis, test_camera_connection
 
 
 class CompanySiteCreateApiTests(APITestCase):
@@ -152,6 +154,7 @@ class CompanySiteCreateApiTests(APITestCase):
                 'capture_interval_minutes': 5,
                 'image_quality': 'HD',
                 'retention_days': 30,
+                'ai_text': '画像を確認してください',
             },
             format='json',
         )
@@ -159,7 +162,8 @@ class CompanySiteCreateApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data['success'], True)
         self.assertEqual(response.data['data']['camera_name'], '新規カメラ')
-        self.assertTrue(Camera.objects.filter(site=self.site, name='新規カメラ', code='camera_000001').exists())
+        camera = Camera.objects.get(site=self.site, name='新規カメラ', code='camera_000001')
+        self.assertEqual(camera.ai_text, '画像を確認してください')
 
     def test_update_camera_accepts_spec_payload(self):
         self.client.force_authenticate(user=self.system_admin)
@@ -184,6 +188,7 @@ class CompanySiteCreateApiTests(APITestCase):
                 'capture_interval_minutes': 10,
                 'image_quality': 'FullHD',
                 'retention_days': 60,
+                'ai_text': '更新後のAIテキスト',
             },
             format='json',
         )
@@ -194,7 +199,46 @@ class CompanySiteCreateApiTests(APITestCase):
         self.assertEqual(camera.name, '更新後カメラ')
         self.assertEqual(camera.url, 'http://example.com/new.jpg')
         self.assertEqual(camera.username, 'new_user')
+        self.assertEqual(camera.capture_interval_minutes, 10)
         self.assertEqual(camera.save_days, 60)
+        self.assertEqual(camera.ai_text, '更新後のAIテキスト')
+
+    @patch('camserver.scheduler.scheduler_instance.schedule_camera')
+    def test_update_camera_reschedules_with_new_capture_interval(self, schedule_camera):
+        self.client.force_authenticate(user=self.system_admin)
+        camera = Camera.objects.create(
+            site=self.site,
+            code='camera_000001',
+            name='更新前カメラ',
+            url='http://example.com/old.jpg',
+            username='old_user',
+            password='old_password',
+            capture_interval_minutes=3,
+        )
+
+        response = self.client.put(
+            reverse('camera-detail', args=[camera.id]),
+            {
+                'site_id': str(self.site.id),
+                'camera_name': '更新後カメラ',
+                'address': 'http://example.com/new.jpg',
+                'auth_method': 'basic',
+                'login_id': 'new_user',
+                'password': '',
+                'capture_interval_minutes': 12,
+                'image_quality': 'HD',
+                'retention_days': 30,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        camera.refresh_from_db()
+        self.assertEqual(camera.capture_interval_minutes, 12)
+        schedule_camera.assert_called_once()
+        scheduled_camera = schedule_camera.call_args.args[0]
+        self.assertEqual(scheduled_camera.id, camera.id)
+        self.assertEqual(scheduled_camera.capture_interval_minutes, 12)
 
     def test_update_camera_keeps_existing_password_when_blank(self):
         self.client.force_authenticate(user=self.system_admin)
@@ -325,6 +369,8 @@ class CompanySiteCreateApiTests(APITestCase):
         self.assertEqual(item['image_id'], str(image.id))
         self.assertTrue(item['thumbnail_url'].endswith('/media/company/site/camera/thumb.jpg'))
         self.assertTrue(item['image_url'].endswith('/media/company/site/camera/original.jpg'))
+        self.assertEqual(item['ai_analysis_status'], 'not_required')
+        self.assertIsNone(item['ai_response_text'])
 
         latest_response = self.client.post(
             reverse('image-latest-bulk'),
@@ -333,6 +379,118 @@ class CompanySiteCreateApiTests(APITestCase):
         )
         self.assertEqual(latest_response.status_code, status.HTTP_200_OK)
         self.assertTrue(latest_response.data['data']['cameras'][0]['thumbnail_url'].endswith('/media/company/site/camera/thumb.jpg'))
+
+    def test_by_date_range_returns_thumbnail_payload_with_pagination(self):
+        self.client.force_authenticate(user=self.system_admin)
+        captured_at = timezone.now()
+        camera = Camera.objects.create(
+            site=self.site,
+            code='camera_000001',
+            name='ページングカメラ',
+            url='http://example.com/current.jpg',
+        )
+        older_image = Image.objects.create(
+            camera=camera,
+            file_path='company/site/camera/older.jpg',
+            thumbnail_path='company/site/camera/older_thumb.jpg',
+            captured_at=captured_at - timedelta(minutes=1),
+        )
+        newer_image = Image.objects.create(
+            camera=camera,
+            file_path='company/site/camera/newer.jpg',
+            thumbnail_path='company/site/camera/newer_thumb.jpg',
+            captured_at=captured_at,
+            ai_analysis_status=Image.AI_STATUS_COMPLETED,
+            ai_response_text='異常なし',
+        )
+
+        response = self.client.get(
+            reverse('image-by-date-range'),
+            {
+                'camera_id': str(camera.id),
+                'date': captured_at.date().isoformat(),
+                'page': 1,
+                'page_size': 1,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['success'], True)
+        self.assertEqual(response.data['data']['pagination']['total_count'], 2)
+        self.assertEqual(response.data['data']['pagination']['total_pages'], 2)
+        self.assertEqual(len(response.data['data']['images']), 1)
+        item = response.data['data']['images'][0]
+        self.assertEqual(item['image_id'], str(newer_image.id))
+        self.assertNotEqual(item['image_id'], str(older_image.id))
+        self.assertEqual(item['ai_response_text'], '異常なし')
+
+    def test_delete_camera_images_removes_images_and_keeps_camera(self):
+        media_root = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(media_root, ignore_errors=True))
+
+        with self.settings(MEDIA_ROOT=media_root):
+            self.client.force_authenticate(user=self.system_admin)
+            camera = Camera.objects.create(
+                site=self.site,
+                code='camera_000001',
+                name='画像削除対象カメラ',
+                url='http://example.com/current.jpg',
+            )
+            paths = [
+                ('company/site/camera/original1.jpg', 'company/site/camera/thumb1.jpg'),
+                ('company/site/camera/original2.jpg', 'company/site/camera/thumb2.jpg'),
+            ]
+            os.makedirs(os.path.join(media_root, 'company/site/camera'), exist_ok=True)
+            for image_path, thumb_path in paths:
+                with open(os.path.join(media_root, image_path), 'wb') as f:
+                    f.write(b'original')
+                with open(os.path.join(media_root, thumb_path), 'wb') as f:
+                    f.write(b'thumb')
+                Image.objects.create(
+                    camera=camera,
+                    file_path=image_path,
+                    thumbnail_path=thumb_path,
+                    captured_at=timezone.now(),
+                )
+
+            response = self.client.delete(reverse('camera-delete-images', args=[camera.id]))
+
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertEqual(response.data['success'], True)
+            self.assertEqual(response.data['data']['camera_id'], str(camera.id))
+            self.assertEqual(response.data['data']['deleted_image_count'], 2)
+            self.assertEqual(response.data['data']['deleted_file_count'], 4)
+            self.assertTrue(Camera.objects.filter(id=camera.id).exists())
+            self.assertFalse(Image.objects.filter(camera=camera).exists())
+            for image_path, thumb_path in paths:
+                self.assertFalse(os.path.exists(os.path.join(media_root, image_path)))
+                self.assertFalse(os.path.exists(os.path.join(media_root, thumb_path)))
+
+    def test_delete_camera_images_rejects_general_user(self):
+        general_user = User.objects.create_user(username='general', password='password')
+        UserRole.objects.create(
+            user=general_user,
+            role='general_user',
+            company=self.company,
+            site=self.site,
+        )
+        camera = Camera.objects.create(
+            site=self.site,
+            code='camera_000001',
+            name='権限外画像削除カメラ',
+            url='http://example.com/current.jpg',
+        )
+        Image.objects.create(
+            camera=camera,
+            file_path='company/site/camera/original.jpg',
+            captured_at=timezone.now(),
+        )
+
+        self.client.force_authenticate(user=general_user)
+        response = self.client.delete(reverse('camera-delete-images', args=[camera.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertTrue(Image.objects.filter(camera=camera).exists())
 
     def test_delete_company_removes_related_images_and_files(self):
         media_root = tempfile.mkdtemp()
@@ -662,15 +820,152 @@ class CameraCaptureTests(APITestCase):
             name='HD保存カメラ',
             url='http://example.com/snapshot.jpg',
             save_quality=85,
+            ai_text='状況を要約してください',
+        )
+
+        with self.settings(MEDIA_ROOT=media_root):
+            image = capture_camera_image(camera.id)
+
+            self.assertIsNotNone(image)
+            self.assertEqual(image.width, 1280)
+            self.assertEqual(image.height, 720)
+            self.assertEqual(image.ai_analysis_status, Image.AI_STATUS_PENDING)
+            self.assertEqual(image.file_size, os.path.getsize(os.path.join(media_root, image.file_path)))
+
+            with PILImage.open(os.path.join(media_root, image.file_path)) as saved_image:
+                self.assertEqual(saved_image.size, (1280, 720))
+
+    @patch('tasks.camera.requests.get')
+    def test_capture_skips_ai_analysis_when_ai_text_is_blank(self, requests_get):
+        media_root = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(media_root, ignore_errors=True))
+
+        source = PILImage.new('RGB', (640, 480), color='blue')
+        source_bytes = BytesIO()
+        source.save(source_bytes, 'JPEG')
+
+        class DummyResponse:
+            status_code = 200
+            content = source_bytes.getvalue()
+
+        requests_get.return_value = DummyResponse()
+
+        camera = Camera.objects.create(
+            site=self.site,
+            code='camera_000001',
+            name='AIなしカメラ',
+            url='http://example.com/snapshot.jpg',
+            ai_text='',
         )
 
         with self.settings(MEDIA_ROOT=media_root):
             image = capture_camera_image(camera)
 
-            self.assertIsNotNone(image)
-            self.assertEqual(image.width, 1280)
-            self.assertEqual(image.height, 720)
-            self.assertEqual(image.file_size, os.path.getsize(os.path.join(media_root, image.file_path)))
+        self.assertIsNotNone(image)
+        self.assertEqual(image.ai_analysis_status, Image.AI_STATUS_NOT_REQUIRED)
 
-            with PILImage.open(os.path.join(media_root, image.file_path)) as saved_image:
-                self.assertEqual(saved_image.size, (1280, 720))
+    @patch('tasks.camera._call_openai_image_analysis')
+    def test_pending_ai_analysis_processes_latest_image_first(self, call_openai):
+        call_openai.side_effect = ['latest result', 'old result']
+        camera = Camera.objects.create(
+            site=self.site,
+            code='camera_000001',
+            name='AIカメラ',
+            url='http://example.com/snapshot.jpg',
+            ai_text='解析してください',
+        )
+        old_image = Image.objects.create(
+            camera=camera,
+            file_path='old.jpg',
+            captured_at=timezone.now() - timedelta(minutes=5),
+            ai_analysis_status=Image.AI_STATUS_PENDING,
+        )
+        latest_image = Image.objects.create(
+            camera=camera,
+            file_path='latest.jpg',
+            captured_at=timezone.now(),
+            ai_analysis_status=Image.AI_STATUS_PENDING,
+        )
+
+        processed = process_pending_ai_analysis(limit=1)
+
+        self.assertEqual(processed, 1)
+        latest_image.refresh_from_db()
+        old_image.refresh_from_db()
+        self.assertEqual(latest_image.ai_analysis_status, Image.AI_STATUS_COMPLETED)
+        self.assertEqual(latest_image.ai_response_text, 'latest result')
+        self.assertEqual(old_image.ai_analysis_status, Image.AI_STATUS_PENDING)
+
+    @patch('tasks.camera._call_openai_image_analysis', side_effect=Exception('boom'))
+    def test_ai_analysis_failure_saves_api_error(self, _call_openai):
+        camera = Camera.objects.create(
+            site=self.site,
+            code='camera_000001',
+            name='AIカメラ',
+            url='http://example.com/snapshot.jpg',
+            ai_text='解析してください',
+        )
+        image = Image.objects.create(
+            camera=camera,
+            file_path='latest.jpg',
+            captured_at=timezone.now(),
+            ai_analysis_status=Image.AI_STATUS_PENDING,
+        )
+
+        processed = process_pending_ai_analysis(limit=1)
+
+        self.assertEqual(processed, 1)
+        image.refresh_from_db()
+        self.assertEqual(image.ai_analysis_status, Image.AI_STATUS_ERROR)
+        self.assertEqual(image.ai_response_text, 'API ERROR')
+
+
+class CameraSchedulerTests(APITestCase):
+    def setUp(self):
+        self.company = Company.objects.create(code='company_000001', name='企業')
+        self.site = Site.objects.create(company=self.company, code='site_000001', name='現場')
+
+    def test_schedule_camera_replaces_existing_job_with_new_interval(self):
+        class DummyJob:
+            next_run_time = None
+
+        class DummyScheduler:
+            running = True
+
+            def __init__(self):
+                self.jobs = {}
+                self.removed_job_ids = []
+                self.added_jobs = []
+
+            def remove_job(self, job_id):
+                self.removed_job_ids.append(job_id)
+                if job_id not in self.jobs:
+                    raise Exception('job not found')
+                del self.jobs[job_id]
+
+            def add_job(self, **kwargs):
+                self.jobs[kwargs['id']] = kwargs
+                self.added_jobs.append(kwargs)
+                return DummyJob()
+
+        camera = Camera.objects.create(
+            site=self.site,
+            code='camera_000001',
+            name='スケジュールカメラ',
+            url='http://example.com/snapshot.jpg',
+            capture_interval_minutes=3,
+        )
+        manager = CameraSchedulerManager()
+        manager.scheduler = DummyScheduler()
+
+        manager.schedule_camera(camera)
+        camera.capture_interval_minutes = 12
+        camera.save(update_fields=['capture_interval_minutes'])
+        manager.schedule_camera(camera)
+
+        job_id = f'camera_{camera.id}'
+        self.assertEqual(manager.scheduler.removed_job_ids, [job_id, job_id])
+        self.assertEqual(len(manager.scheduler.added_jobs), 2)
+        self.assertEqual(manager.scheduler.added_jobs[0]['trigger'].interval.total_seconds(), 180)
+        self.assertEqual(manager.scheduler.added_jobs[1]['trigger'].interval.total_seconds(), 720)
+        self.assertEqual(manager.scheduler.added_jobs[1]['args'], [camera.id])

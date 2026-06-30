@@ -36,7 +36,7 @@ class CameraAdmin(admin.ModelAdmin):
             'fields': ('url', 'username', 'password')
         }),
         ('取得設定', {
-            'fields': ('capture_interval_minutes', 'is_capturing', 'save_quality', 'save_days')
+            'fields': ('capture_interval_minutes', 'is_capturing', 'save_quality', 'save_days', 'ai_text')
         }),
         ('ステータス', {
             'fields': ('is_active', 'last_capture_at', 'created_at', 'updated_at')
@@ -46,10 +46,10 @@ class CameraAdmin(admin.ModelAdmin):
 
 @admin.register(Image)
 class ImageAdmin(admin.ModelAdmin):
-    list_display = ('camera', 'captured_at', 'file_size', 'width', 'height')
-    list_filter = ('camera', 'captured_at', 'created_at')
+    list_display = ('camera', 'captured_at', 'file_size', 'width', 'height', 'ai_analysis_status')
+    list_filter = ('camera', 'ai_analysis_status', 'captured_at', 'created_at')
     search_fields = ('camera__name', 'file_path')
-    readonly_fields = ('id', 'created_at', 'updated_at')
+    readonly_fields = ('id', 'created_at', 'updated_at', 'ai_requested_at', 'ai_responded_at')
 
 
 @admin.register(CameraSchedule)
