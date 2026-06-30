@@ -339,6 +339,7 @@ api_list:
     - "POST   /api/v1/cameras/"
     - "PUT    /api/v1/cameras/{camera_id}/"
     - "DELETE /api/v1/cameras/{camera_id}/"
+    - "DELETE /api/v1/cameras/{camera_id}/images/"
     - "POST   /api/v1/cameras/{camera_id}/test_connection/"
 
   image:
@@ -1307,6 +1308,15 @@ camera_apis:
                     - "site_admin"
                   hidden_roles:
                     - "general_user"
+                ai_text:
+                  type: "string"
+                  nullable: true
+                  visible_roles:
+                    - "system_admin"
+                    - "company_admin"
+                    - "site_admin"
+                  hidden_roles:
+                    - "general_user"
                 status:
                   type: "string"
                 last_capture_at:
@@ -1374,6 +1384,11 @@ camera_apis:
               type: "string"
             retention_days:
               type: "integer"
+            ai_text:
+              type: "string"
+              nullable: true
+              max_length: 2000
+              description: "画像取得後にAI画像解析へ渡すカメラ別プロンプトテンプレート。空欄の場合はAI解析APIを呼び出さない"
             status:
               type: "string"
 
@@ -1440,6 +1455,12 @@ camera_apis:
           type: "integer"
           required: true
           minimum: 1
+        ai_text:
+          type: "string"
+          required: false
+          nullable: true
+          max_length: 2000
+          description: "画像取得後にAI画像解析へ渡すカメラ別プロンプトテンプレート。空欄の場合はAI解析APIを呼び出さない"
 
     response:
       success_status: 201
@@ -1468,6 +1489,7 @@ camera_apis:
       - "取得間隔は1分以上"
       - "保存期間は1日以上"
       - "保存画質は定義済み値のみ"
+      - "AIテキストは最大2000文字"
 
   update_camera:
     api_id: "API_CAMERA_004"
@@ -1518,6 +1540,12 @@ camera_apis:
           type: "integer"
           required: true
           minimum: 1
+        ai_text:
+          type: "string"
+          required: false
+          nullable: true
+          max_length: 2000
+          description: "画像取得後にAI画像解析へ渡すカメラ別プロンプトテンプレート。空欄の場合はAI解析APIを呼び出さない"
 
     response:
       success_status: 200
@@ -1579,8 +1607,72 @@ camera_apis:
           type: "string"
           example: "カメラを削除しました"
 
-  test_connection_by_input:
+  delete_camera_images:
     api_id: "API_CAMERA_006"
+    name: "カメラ保存済み画像一括削除API"
+    method: "DELETE"
+    path: "/api/v1/cameras/{camera_id}/images/"
+    authentication_required: true
+    allowed_roles:
+      - "system_admin"
+      - "company_admin"
+      - "site_admin"
+    description: "指定カメラの設定は残したまま、保存済み画像メタデータ、画像ファイル、サムネイルをすべて削除する"
+
+    path_parameters:
+      camera_id:
+        type: "string"
+        required: true
+
+    request:
+      body: {}
+
+    delete_policy:
+      camera_setting_delete: false
+      image_metadata_delete: true
+      image_file_delete: true
+      thumbnail_file_delete: true
+      scope: "指定camera_idに紐づく保存済み画像のみ"
+      idempotency: "削除対象画像が0件の場合も成功扱いとする"
+      latest_image_after_delete: "対象カメラの最新画像は存在しない状態になる"
+      last_capture_at_after_delete: "カメラ設定のlast_capture_atを保持するかnullに更新するかは実装設計で決定する"
+
+    response:
+      success_status: 200
+      body:
+        success:
+          type: "boolean"
+        data:
+          type: "object"
+          fields:
+            camera_id:
+              type: "string"
+            deleted_image_count:
+              type: "integer"
+              description: "削除した画像メタデータ件数"
+            deleted_file_count:
+              type: "integer"
+              description: "削除した画像ファイルおよびサムネイルファイル件数"
+        message:
+          type: "string"
+          example: "カメラの保存済み画像を削除しました"
+
+    validation:
+      - "camera_id必須"
+      - "ログインユーザーが対象カメラを管理できる権限範囲内であること"
+
+    error_responses:
+      not_found:
+        status: 404
+        code: "NOT_FOUND"
+        message: "カメラが見つかりません"
+      forbidden:
+        status: 403
+        code: "FORBIDDEN"
+        message: "この操作を実行する権限がありません"
+
+  test_connection_by_input:
+    api_id: "API_CAMERA_007"
     name: "入力値によるカメラ接続テストAPI"
     method: "POST"
     path: "/api/v1/cameras/{camera_id}/test_connection/"
@@ -1648,7 +1740,7 @@ camera_apis:
       - "接続テスト結果ログにもパスワードを保存しない"
 
   test_connection_by_camera_id:
-    api_id: "API_CAMERA_007"
+    api_id: "API_CAMERA_008"
     name: "登録済みカメラ接続テストAPI"
     method: "POST"
     path: "/api/v1/cameras/{camera_id}/test_connection/"
@@ -1832,12 +1924,27 @@ image_apis:
                 height:
                   type: "integer"
                   nullable: true
+                ai_analysis_status:
+                  type: "string"
+                  allowed_values:
+                    - "not_required"
+                    - "pending"
+                    - "processing"
+                    - "completed"
+                    - "error"
+                  description: "AI画像解析APIの呼び出し状態"
+                ai_response_text:
+                  type: "string"
+                  nullable: true
+                  max_length: 256
+                  description: "サムネイル下に表示するAI画像解析応答テキスト。未実行時はnullまたは空文字、失敗時はAPI ERROR"
             pagination:
               ref: "common_response.pagination"
 
     notes:
       - "サムネイル画像そのものではなく、サムネイルURLまたは画像取得APIのURLを返却する"
       - "サムネイルをファイル保存するか動的生成するかは02_data_spec.yamlの未決事項に従う"
+      - "ai_response_textはサムネイル画像の下に表示する。長い場合の省略表示は03_ui_spec.yamlに従う"
 
   get_image_metadata:
     api_id: "API_IMAGE_003"
@@ -2166,6 +2273,7 @@ role_based_api_access:
       - "カメラ登録"
       - "カメラ更新"
       - "カメラ削除"
+      - "カメラ保存済み画像一括削除"
       - "接続テスト"
 
 
@@ -2220,6 +2328,13 @@ validation_rules:
       type: "integer"
       minimum: 1
 
+    ai_text:
+      required: false
+      nullable: true
+      type: "string"
+      max_length: 2000
+      note: "空欄の場合、画像取得後のAI画像解析API呼び出しは行わない"
+
   image:
     date:
       format: "YYYY-MM-DD"
@@ -2259,6 +2374,7 @@ security:
       - "カメラ登録"
       - "カメラ更新"
       - "カメラ削除"
+      - "カメラ保存済み画像一括削除"
       - "接続テスト"
       - "原寸画像表示"
 
@@ -2314,6 +2430,7 @@ screen_api_mapping:
     used_apis:
       - "GET /api/v1/cameras/"
       - "DELETE /api/v1/cameras/{camera_id}/"
+      - "DELETE /api/v1/cameras/{camera_id}/images/"
       - "POST /api/v1/cameras/{camera_id}/test_connection/"
 
   SCR_CAMERA_FORM:
@@ -2348,7 +2465,10 @@ confirmed_items:
   - "カメラ登録APIを定義する"
   - "カメラ更新APIを定義する"
   - "カメラ削除APIを定義する"
+  - "カメラ保存済み画像一括削除APIを定義する"
   - "カメラ接続テストAPIを定義する"
+  - "カメラ登録・更新・詳細APIでAIテキストを扱う"
+  - "サムネイル一覧取得APIでAI解析状態とAI応答テキストを返却する"
   - "画像が存在する日付一覧取得APIを定義する"
   - "サムネイル一覧取得APIを定義する"
   - "原寸画像表示用APIを定義する"

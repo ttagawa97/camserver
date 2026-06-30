@@ -44,6 +44,7 @@ revision_history:
       - "複数カメラ最新画像まとめ表示機能を追加"
       - "画像保存は企業・現場・カメラ・日付単位のフォルダ階層とする方針を定義"
       - "保存画質はサーバー側変換とする方針を定義"
+      - "カメラ別AIテキストによる画像解析と解析結果表示方針を追加"
 
 
 # ==============================================================================
@@ -76,6 +77,7 @@ system:
     - "画像が存在する日付のみをカレンダーから選択可能にする"
     - "サムネイル一覧から原寸画像を確認できるようにする"
     - "複数カメラの最新画像をまとめて監視できるようにする"
+    - "カメラ別AIテキストに基づいて保存画像を非同期解析し、解析結果をサムネイル下に表示する"
 
 
 # ==============================================================================
@@ -338,6 +340,21 @@ features:
       refresh_behavior: "画面表示中は最新画像を常に表示する"
       refresh_source: "サーバーに保存済みの最新画像"
 
+  ai_image_analysis:
+    name: "AI画像解析機能"
+    description: "カメラごとに設定したAIテキストを使い、保存済み画像をOpenAI APIで非同期解析する"
+    target_roles:
+      - "system"
+    behavior:
+      prompt_source: "camera.ai_text"
+      skip_when_empty: true
+      execution_timing: "画像保存後の非同期処理"
+      api_key_source: "環境変数 OPENAI_API_KEY"
+      response_storage: "captured_image.ai_response_text"
+      response_max_length: 256
+      failure_text: "API ERROR"
+      queue_order: "最新画像優先のLIFO"
+
 
 # ==============================================================================
 # カメラ管理仕様概要
@@ -435,6 +452,11 @@ camera_management:
         required: true
         description: "取得画像を保存する期間"
 
+      ai_text:
+        label: "AIテキスト"
+        required: false
+        description: "画像取得後にAI画像解析へ渡すカメラ別プロンプトテンプレート。空欄の場合はAI解析APIを呼び出さない"
+
   password_update_rule:
     description: "パスワード変更は上書き方式とする"
     update_method: "入力されたパスワードで既存パスワードを上書き"
@@ -505,6 +527,16 @@ image_capture_and_storage:
     description: "サムネイル一覧表示に使用する縮小画像"
     generation_timing: "未決"
     storage_method: "未決"
+
+  ai_analysis:
+    description: "カメラのAIテキストが設定されている場合、画像保存後に非同期でAI画像解析を行い、応答テキストを画像メタデータへ保存する"
+    api_key_source: "OPENAI_API_KEY"
+    model_default: "gpt-5.5"
+    model_override: "OPENAI_MODEL"
+    empty_ai_text_behavior: "API呼び出しなし"
+    failure_behavior: "画像保存は成功扱いとし、応答テキストにAPI ERRORを保存する"
+    pending_execution: "未呼び出し画像は後から実行可能"
+    queue_policy: "最新画像を優先する後入れ先出し"
 
 
 # ==============================================================================
@@ -825,6 +857,9 @@ confirmed_items:
   - "接続テスト機能を持つ"
   - "パスワード変更は上書き方式とする"
   - "保存画質はサーバー側で変換する"
+  - "カメラごとにAIテキストを設定でき、空欄の場合はAI画像解析APIを呼び出さない"
+  - "AI画像解析は画像保存後に非同期で実行し、未呼び出し画像は最新画像優先のLIFOで処理する"
+  - "AI画像解析失敗時も画像保存は成功扱いとし、応答テキストはAPI ERRORとする"
   - "複数カメラの最新画像をまとめて表示する機能を持つ"
   - "左側のカメラメニューにチェックマークを入れて複数カメラを選択する"
   - "まとめて参照ボタン押下で複数カメラ最新画像画面に遷移する"

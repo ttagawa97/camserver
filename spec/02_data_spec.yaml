@@ -483,6 +483,13 @@ camera:
       minimum: 1
       description: "画像保存期間。単位は日"
 
+    ai_text:
+      type: "string"
+      required: false
+      nullable: true
+      max_length: 2000
+      description: "画像取得後にAI画像解析へ渡すカメラ別プロンプトテンプレート。空欄の場合はAI解析APIを呼び出さない"
+
     status:
       type: "string"
       required: true
@@ -773,6 +780,44 @@ captured_image:
       default: "success"
       description: "画像取得結果。通常、成功した画像のみ captured_image に登録する想定"
 
+    ai_analysis_status:
+      type: "string"
+      required: true
+      allowed_values:
+        - "not_required"
+        - "pending"
+        - "processing"
+        - "completed"
+        - "error"
+      default: "not_required"
+      description: "AI画像解析APIの呼び出し状態。カメラのai_textが空欄の場合はnot_required、設定ありの場合は画像保存後にpendingとする"
+
+    ai_response_text:
+      type: "string"
+      required: false
+      nullable: true
+      max_length: 256
+      description: "AI画像解析APIが返答したテキスト。API呼び出し失敗時はAPI ERRORを保存する"
+
+    ai_requested_at:
+      type: "datetime"
+      required: false
+      nullable: true
+      description: "AI画像解析API呼び出しを開始した日時"
+
+    ai_responded_at:
+      type: "datetime"
+      required: false
+      nullable: true
+      description: "AI画像解析APIの結果を保存した日時"
+
+    ai_error_message:
+      type: "string"
+      required: false
+      nullable: true
+      max_length: 512
+      description: "AI画像解析API失敗時の内部確認用エラー概要。画面には原則表示しない"
+
     created_at:
       type: "datetime"
       required: true
@@ -790,6 +835,12 @@ captured_image:
         - "camera_id"
         - "captured_at"
       purpose: "カメラ別の最新画像取得を高速化"
+
+    - name: "idx_captured_image_ai_pending_lifo"
+      fields:
+        - "ai_analysis_status"
+        - "captured_at"
+      purpose: "AI画像解析未実行画像を最新順に取得し、後入れ先出しで処理する"
 
     - name: "idx_captured_image_site_date"
       fields:
@@ -1568,6 +1619,9 @@ confirmed_items:
   - "画像取得失敗時は画像メタデータではなく取得ログに記録する"
   - "複数カメラ最新画像まとめ表示では、サーバー保存済みの最新画像を参照する"
   - "画像が存在する日付のみをカレンダーで選択可能にする"
+  - "カメラごとにAIテキストを保持する"
+  - "取得画像ごとにAI画像解析状態とAI応答テキストを保持する"
+  - "AI応答テキストの最大保存文字数は256文字とする"
 
 
 # ==============================================================================

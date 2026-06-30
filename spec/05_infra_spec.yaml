@@ -469,6 +469,19 @@ environment_variables:
       example: "http://localhost:8000/api/v1/images"
       description: "画像参照URL生成に使用するベースURL"
 
+    OPENAI_API_KEY:
+      example: "sk-..."
+      required_condition: "AI画像解析機能を使用する場合"
+      description: "AI画像解析API呼び出しに使用するOpenAI APIキー。環境変数から取得し、DBやログには保存しない"
+
+    OPENAI_MODEL:
+      default: "gpt-5.5"
+      description: "AI画像解析に使用するモデル。現行利用可能モデルの初期値としてgpt-5.5を使用し、将来のモデル更新時は環境変数で差し替え可能とする"
+
+    OPENAI_AI_RESPONSE_MAX_LENGTH:
+      value: 256
+      description: "AI応答テキストの最大保存文字数"
+
   database:
     POSTGRES_DB:
       value: "camera_db"
@@ -539,10 +552,14 @@ camera_capture_process:
       description: "captured_imageへ画像メタデータを登録する"
 
     - step: 9
+      name: "AI画像解析ジョブ投入"
+      description: "カメラのAIテキストが設定されている場合、保存済み画像IDをAI画像解析キューへ投入し、captured_image.ai_analysis_statusをpendingにする。AIテキストが空欄の場合はnot_requiredとする"
+
+    - step: 10
       name: "最新画像情報更新"
       description: "camera_latest_imageを更新する"
 
-    - step: 10
+    - step: 11
       name: "ログ登録"
       description: "camera_capture_logへ取得結果を登録する"
 
@@ -557,6 +574,90 @@ camera_capture_process:
     read_timeout_seconds: 20
     status: "仮設定"
     note: "正式値はカメラ機種、ネットワーク状況により調整"
+
+
+# ==============================================================================
+# AI画像解析処理
+# ==============================================================================
+ai_image_analysis_process:
+  description: >
+    画像保存後、カメラ設定のAIテキストが設定されている画像について、
+    OpenAI APIへ保存済み画像とAIテキストを送信し、返答テキストを画像メタデータへ保存する。
+
+  execution_component: "worker"
+  execution_timing: "画像保存後の非同期処理"
+  api_key_source: "環境変数 OPENAI_API_KEY"
+  model:
+    environment_variable: "OPENAI_MODEL"
+    default: "gpt-5.5"
+    note: "利用可能な最新モデルへ更新する場合は環境変数で差し替える"
+
+  enqueue_rule:
+    condition:
+      - "camera.ai_text が空欄でない"
+      - "captured_image が保存済みである"
+    skipped_condition:
+      - "camera.ai_text が空欄の場合はAPI呼び出しを行わず、ai_analysis_status=not_requiredとする"
+    status_on_enqueue: "pending"
+
+  queue_policy:
+    type: "LIFO"
+    priority: "最新画像を優先"
+    dequeue_order:
+      - "ai_analysis_status=pending の画像を captured_at desc で取得する"
+      - "同一時刻の場合は created_at desc または image_id desc を使用する"
+    retry_target:
+      - "pending"
+      - "errorの再実行対象指定時"
+    description: "未呼び出し画像が複数ある場合、後から保存された最新画像を先に解析する"
+
+  process_flow:
+    - step: 1
+      name: "未実行画像取得"
+      description: "ai_analysis_status=pendingのcaptured_imageを最新順に取得する"
+
+    - step: 2
+      name: "処理中更新"
+      description: "対象画像をai_analysis_status=processingに更新し、ai_requested_atを記録する"
+
+    - step: 3
+      name: "OpenAI API呼び出し"
+      description: "保存済み画像とcamera.ai_textを入力としてOpenAI APIを呼び出す"
+
+    - step: 4
+      name: "応答保存"
+      description: "AI応答テキストを最大256文字に切り詰めてcaptured_image.ai_response_textへ保存し、ai_analysis_status=completed、ai_responded_atを更新する"
+
+    - step: 5
+      name: "失敗時保存"
+      description: "API呼び出し失敗時も画像保存は成功扱いのままとし、ai_response_text=API ERROR、ai_analysis_status=error、ai_responded_atを保存する"
+
+  response_text_rule:
+    max_length: 256
+    truncate_on_save: true
+    api_error_text: "API ERROR"
+    display_source: "captured_image.ai_response_text"
+
+  failure_policy:
+    image_save_result: "AI解析に失敗しても画像保存は成功扱いとする"
+    missing_api_key:
+      behavior: "AI呼び出し失敗として扱う"
+      ai_response_text: "API ERROR"
+      status: "error"
+    timeout_or_api_error:
+      behavior: "AI呼び出し失敗として扱う"
+      ai_response_text: "API ERROR"
+      status: "error"
+    log_plain_api_key: false
+
+  rerun_policy:
+    description: "未呼び出しまたは失敗したAI解析を後から実行できるようにする"
+    default_target_status:
+      - "pending"
+    manual_or_batch_rerun_candidates:
+      - "pending画像の一括処理"
+      - "error画像をpendingへ戻して再実行"
+    order: "captured_at desc"
 
   retry:
     status: "未決"
@@ -1326,6 +1427,9 @@ confirmed_items:
   - "サムネイルは画像取得時に生成することを推奨する"
   - "保存期間超過画像削除処理を用意する"
   - "通常サムネイル、原寸画像、複数カメラ最新画像はサーバー保存済み画像を参照する"
+  - "AI画像解析は画像保存後に非同期ワーカーで実行する"
+  - "OpenAI APIキーはOPENAI_API_KEY環境変数から取得する"
+  - "AI画像解析キューは最新画像優先のLIFOで処理する"
   - "開発環境でも権限チェックを有効にする"
 
 
@@ -1462,4 +1566,3 @@ pending_items:
       - "幅240px"
       - "幅320px"
     recommendation: "幅240px"
-
