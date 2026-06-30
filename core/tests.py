@@ -204,6 +204,51 @@ class CompanySiteCreateApiTests(APITestCase):
         self.assertEqual(camera.ai_text, '更新後のAIテキスト')
 
     @patch('camserver.scheduler.scheduler_instance.schedule_camera')
+    def test_update_camera_queues_existing_images_when_ai_text_is_added(self, schedule_camera):
+        self.client.force_authenticate(user=self.system_admin)
+        camera = Camera.objects.create(
+            site=self.site,
+            code='camera_000001',
+            name='AI追加前カメラ',
+            url='http://example.com/old.jpg',
+            username='old_user',
+            password='old_password',
+            ai_text='',
+        )
+        image = Image.objects.create(
+            camera=camera,
+            file_path='company/site/camera/original.jpg',
+            thumbnail_path='company/site/camera/thumb.jpg',
+            captured_at=timezone.now() - timedelta(minutes=1),
+            ai_analysis_status=Image.AI_STATUS_NOT_REQUIRED,
+        )
+
+        response = self.client.put(
+            reverse('camera-detail', args=[camera.id]),
+            {
+                'site_id': str(self.site.id),
+                'camera_name': 'AI追加後カメラ',
+                'address': 'http://example.com/new.jpg',
+                'auth_method': 'basic',
+                'login_id': 'new_user',
+                'password': '',
+                'capture_interval_minutes': 10,
+                'image_quality': 'HD',
+                'retention_days': 30,
+                'ai_text': '画像を解析してください',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        image.refresh_from_db()
+        self.assertEqual(image.ai_analysis_status, Image.AI_STATUS_PENDING)
+        self.assertEqual(image.ai_response_text, '')
+        self.assertIsNone(image.ai_requested_at)
+        self.assertIsNone(image.ai_responded_at)
+        schedule_camera.assert_called_once()
+
+    @patch('camserver.scheduler.scheduler_instance.schedule_camera')
     def test_update_camera_reschedules_with_new_capture_interval(self, schedule_camera):
         self.client.force_authenticate(user=self.system_admin)
         camera = Camera.objects.create(
@@ -344,6 +389,7 @@ class CompanySiteCreateApiTests(APITestCase):
             file_path='company/site/camera/original.jpg',
             thumbnail_path='company/site/camera/thumb.jpg',
             captured_at=captured_at,
+            file_size=1234,
             width=1920,
             height=1080,
         )
@@ -365,6 +411,8 @@ class CompanySiteCreateApiTests(APITestCase):
             },
         )
         self.assertEqual(thumbnails_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(thumbnails_response.data['data']['summary']['image_count'], 1)
+        self.assertEqual(thumbnails_response.data['data']['summary']['total_file_size_bytes'], 1234)
         item = thumbnails_response.data['data']['images'][0]
         self.assertEqual(item['image_id'], str(image.id))
         self.assertTrue(item['thumbnail_url'].endswith('/media/company/site/camera/thumb.jpg'))
@@ -394,12 +442,14 @@ class CompanySiteCreateApiTests(APITestCase):
             file_path='company/site/camera/older.jpg',
             thumbnail_path='company/site/camera/older_thumb.jpg',
             captured_at=captured_at - timedelta(minutes=1),
+            file_size=100,
         )
         newer_image = Image.objects.create(
             camera=camera,
             file_path='company/site/camera/newer.jpg',
             thumbnail_path='company/site/camera/newer_thumb.jpg',
             captured_at=captured_at,
+            file_size=250,
             ai_analysis_status=Image.AI_STATUS_COMPLETED,
             ai_response_text='異常なし',
         )
@@ -416,6 +466,8 @@ class CompanySiteCreateApiTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['success'], True)
+        self.assertEqual(response.data['data']['summary']['image_count'], 2)
+        self.assertEqual(response.data['data']['summary']['total_file_size_bytes'], 350)
         self.assertEqual(response.data['data']['pagination']['total_count'], 2)
         self.assertEqual(response.data['data']['pagination']['total_pages'], 2)
         self.assertEqual(len(response.data['data']['images']), 1)

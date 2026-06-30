@@ -11,7 +11,7 @@ from django.contrib.auth import authenticate, login as auth_login, logout as aut
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from django.db import IntegrityError, transaction
-from django.db.models import Q
+from django.db.models import Q, Sum
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import URLValidator
 from django.middleware.csrf import get_token
@@ -371,6 +371,34 @@ def _schedule_camera_if_possible(camera):
         scheduler_instance.schedule_camera(camera)
     except Exception as exc:
         logger.warning('Failed to schedule camera %s: %s', camera.id, exc)
+
+
+def _sync_ai_analysis_queue_for_camera(camera, previous_ai_text):
+    previous_prompt = (previous_ai_text or '').strip()
+    current_prompt = (camera.ai_text or '').strip()
+
+    if not previous_prompt and current_prompt:
+        Image.objects.filter(
+            camera=camera,
+            ai_analysis_status=Image.AI_STATUS_NOT_REQUIRED,
+        ).update(
+            ai_analysis_status=Image.AI_STATUS_PENDING,
+            ai_response_text='',
+            ai_error_message='',
+            ai_requested_at=None,
+            ai_responded_at=None,
+        )
+    elif previous_prompt and not current_prompt:
+        Image.objects.filter(
+            camera=camera,
+            ai_analysis_status=Image.AI_STATUS_PENDING,
+        ).update(
+            ai_analysis_status=Image.AI_STATUS_NOT_REQUIRED,
+            ai_response_text='',
+            ai_error_message='',
+            ai_requested_at=None,
+            ai_responded_at=None,
+        )
 
 
 def _delete_image_files(images):
@@ -1020,6 +1048,8 @@ class CameraViewSet(viewsets.ModelViewSet):
                 'camera_name': ['同じ現場に同じカメラ名が既に登録されています'],
             })
 
+        previous_ai_text = camera.ai_text
+
         camera.site = site
         camera.name = payload['camera_name']
         camera.url = payload['address']
@@ -1032,6 +1062,7 @@ class CameraViewSet(viewsets.ModelViewSet):
         camera.ai_text = payload['ai_text']
         camera.save()
 
+        _sync_ai_analysis_queue_for_camera(camera, previous_ai_text)
         _schedule_camera_if_possible(camera)
         return Response({
             'success': True,
@@ -1223,6 +1254,12 @@ class ImageViewSet(viewsets.ReadOnlyModelViewSet):
             'ai_response_text': image.ai_response_text or None,
         }
 
+    def _image_summary(self, images):
+        return {
+            'image_count': images.count(),
+            'total_file_size_bytes': images.aggregate(total=Sum('file_size'))['total'] or 0,
+        }
+
     def _scoped_camera(self, camera_id):
         try:
             camera = Camera.objects.select_related('site', 'site__company').get(id=camera_id)
@@ -1280,6 +1317,7 @@ class ImageViewSet(viewsets.ReadOnlyModelViewSet):
             images = images.order_by('-captured_at')
 
         total_count = images.count()
+        summary = self._image_summary(images)
         total_pages = max(1, (total_count + page_size - 1) // page_size)
         page = min(page, total_pages)
         start = (page - 1) * page_size
@@ -1293,6 +1331,7 @@ class ImageViewSet(viewsets.ReadOnlyModelViewSet):
                     'camera_name': camera.name,
                 },
                 'date': date,
+                'summary': summary,
                 'images': [self._image_item(request, image) for image in page_images],
                 'pagination': {
                     'page': page,
@@ -1331,6 +1370,7 @@ class ImageViewSet(viewsets.ReadOnlyModelViewSet):
             images = images.order_by('captured_at')
         else:
             images = images.order_by('-captured_at')
+        summary = self._image_summary(images)
 
         return Response({
             'success': True,
@@ -1340,6 +1380,7 @@ class ImageViewSet(viewsets.ReadOnlyModelViewSet):
                     'camera_name': camera.name,
                 },
                 'date': date,
+                'summary': summary,
                 'images': [self._image_item(request, image) for image in images],
                 'pagination': {
                     'page': 1,

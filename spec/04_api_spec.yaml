@@ -1905,6 +1905,16 @@ image_apis:
                   type: "string"
             date:
               type: "date"
+            summary:
+              type: "object"
+              description: "選択カメラ、選択日付における画像一覧の集計情報。ページングに関係なく全件を対象とする"
+              fields:
+                image_count:
+                  type: "integer"
+                  description: "対象条件に一致する画像総数"
+                total_file_size_bytes:
+                  type: "integer"
+                  description: "対象条件に一致する原寸画像ファイルサイズ合計。サムネイルファイルサイズは含めない"
             images:
               type: "array"
               items:
@@ -1946,6 +1956,7 @@ image_apis:
       - "サムネイル画像そのものではなく、サムネイルURLまたは画像取得APIのURLを返却する"
       - "サムネイルをファイル保存するか動的生成するかは02_data_spec.yamlの未決事項に従う"
       - "ai_response_textはサムネイル画像の下に表示する。長い場合の省略表示は03_ui_spec.yamlに従う"
+      - "summary.image_countおよびsummary.total_file_size_bytesはページング前の全件を対象に集計する"
 
   get_image_metadata:
     api_id: "API_IMAGE_003"

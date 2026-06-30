@@ -958,6 +958,12 @@ image_available_date:
       required: true
       description: "対象日付に存在する画像数"
 
+    total_file_size_bytes:
+      type: "integer"
+      required: false
+      default: 0
+      description: "対象日付に存在する原寸画像ファイルサイズの合計。サムネイルファイルサイズは含めない"
+
     latest_captured_at:
       type: "datetime"
       required: false

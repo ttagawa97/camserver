@@ -791,6 +791,7 @@ SCR_CAMERA_THUMBNAIL:
       name: "静止画サムネイル一覧"
       components:
         - "選択日付表示"
+        - "画像枚数・使用容量表示"
         - "サムネイルグリッド"
         - "画像なしメッセージ"
         - "読み込み状態表示"
@@ -871,6 +872,25 @@ SCR_CAMERA_THUMBNAIL:
 
     on_change:
       description: "日付変更時、右側のサムネイル一覧を再取得する"
+
+  image_summary:
+    description: "選択中カメラ、選択中日付の画像枚数と使用容量を表示する"
+    source: "サムネイル一覧取得APIのsummary"
+    display_position: "静止画サムネイル一覧エリアの右上。カメラ名・日付選択と同じツールバー行の右端、またはサムネイルグリッド直上の右寄せ領域"
+    display_items:
+      - key: "image_count"
+        label: "画像枚数"
+        format: "{value}枚"
+        description: "選択中カメラ、選択中日付に存在する画像総数。ページング中でも全件数を表示する"
+      - key: "total_file_size_bytes"
+        label: "使用容量"
+        format: "自動単位変換（B/KB/MB/GB、小数1桁まで）"
+        description: "選択中カメラ、選択中日付に存在する原寸画像ファイル容量の合計。サムネイル容量は含めない"
+    empty_state:
+      image_count: "0枚"
+      total_file_size_bytes: "0 B"
+    loading_state:
+      description: "サムネイル一覧取得中は前回値を表示するか、読み込み状態表示に合わせて一時的に非表示としてよい"
 
   thumbnail_grid:
     description: "右側に表示する静止画サムネイル一覧"
